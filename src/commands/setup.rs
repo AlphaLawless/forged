@@ -4,11 +4,33 @@ use inquire::{Password, Select, Text};
 
 use crate::config::{CommitType, Config};
 
-const PROVIDERS: &[(&str, &str)] = &[
-    ("claude", "Claude (Anthropic)"),
-    // Future: ("gemini", "Gemini (Google)"),
-    // Future: ("openrouter", "OpenRouter"),
-    // Future: ("chatgpt", "ChatGPT (OpenAI)"),
+#[derive(Debug, Clone)]
+pub struct ProviderInfo {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub models: &'static [&'static str],
+}
+
+const PROVIDER_LIST: &[ProviderInfo] = &[
+    ProviderInfo {
+        key: "claude",
+        label: "Claude (Anthropic)",
+        models: &[
+            "claude-sonnet-4-6-20250514",
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-6-20250603",
+        ],
+    },
+    ProviderInfo {
+        key: "gemini",
+        label: "Gemini (Google)",
+        models: &[
+            "gemini-2.5-flash",
+            "gemini-2.5-pro",
+            "gemini-2.0-flash",
+        ],
+    },
+    // Future: OpenRouter, ChatGPT
 ];
 
 const COMMIT_TYPES: &[(&str, &str)] = &[
@@ -18,11 +40,25 @@ const COMMIT_TYPES: &[(&str, &str)] = &[
     ("subject+body", "subject+body  — title + detailed description"),
 ];
 
-const MODELS_CLAUDE: &[&str] = &[
-    "claude-sonnet-4-6-20250514",
-    "claude-haiku-4-5-20251001",
-    "claude-opus-4-6-20250603",
-];
+/// Return the list of available provider keys.
+pub fn available_providers() -> Vec<&'static str> {
+    PROVIDER_LIST.iter().map(|p| p.key).collect()
+}
+
+/// Return the list of available provider labels (for display).
+pub fn available_provider_labels() -> Vec<&'static str> {
+    PROVIDER_LIST.iter().map(|p| p.label).collect()
+}
+
+/// Find a provider by key.
+pub fn find_provider(key: &str) -> Option<&'static ProviderInfo> {
+    PROVIDER_LIST.iter().find(|p| p.key == key)
+}
+
+/// Find a provider by its display label.
+fn find_provider_by_label(label: &str) -> Option<&'static ProviderInfo> {
+    PROVIDER_LIST.iter().find(|p| p.label == label)
+}
 
 /// Check if setup is needed (no provider or no api_key configured).
 pub fn needs_setup(config: &Config) -> bool {
@@ -38,16 +74,22 @@ pub fn run(existing: Option<Config>) -> Result<Config> {
     let mut config = existing.unwrap_or_default();
 
     // 1. Provider selection
-    let provider_labels: Vec<&str> = PROVIDERS.iter().map(|(_, label)| *label).collect();
-    let provider_idx = Select::new("Choose your AI provider:", provider_labels)
-        .with_help_message("More providers coming soon")
+    let labels = available_provider_labels();
+    let starting_idx = if !config.provider.is_empty() {
+        PROVIDER_LIST
+            .iter()
+            .position(|p| p.key == config.provider)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let selected_label = Select::new("Choose your AI provider:", labels)
+        .with_starting_cursor(starting_idx)
+        .with_page_size(10)
         .prompt()?;
-    let selected_provider = PROVIDERS
-        .iter()
-        .find(|(_, label)| *label == provider_idx)
-        .map(|(name, _)| *name)
-        .unwrap_or("claude");
-    config.provider = selected_provider.into();
+    let provider_info = find_provider_by_label(selected_label)
+        .expect("selected label must match a provider");
+    config.provider = provider_info.key.into();
 
     // 2. API Key
     let key_hint = if !config.api_key.is_empty() {
@@ -65,17 +107,15 @@ pub fn run(existing: Option<Config>) -> Result<Config> {
     }
 
     // 3. Model selection
-    let models: Vec<&str> = match selected_provider {
-        "claude" => MODELS_CLAUDE.to_vec(),
-        _ => vec![],
-    };
-    if !models.is_empty() {
+    if !provider_info.models.is_empty() {
+        let models: Vec<&str> = provider_info.models.to_vec();
         let default_idx = models
             .iter()
             .position(|m| *m == config.model)
             .unwrap_or(0);
-        let model = Select::new("Choose a model:", models.clone())
+        let model = Select::new("Choose a model:", models)
             .with_starting_cursor(default_idx)
+            .with_page_size(10)
             .prompt()?;
         config.model = model.to_string();
     }
@@ -88,6 +128,7 @@ pub fn run(existing: Option<Config>) -> Result<Config> {
         .unwrap_or(0);
     let type_selection = Select::new("Commit message format:", type_labels)
         .with_starting_cursor(current_type_idx)
+        .with_page_size(10)
         .prompt()?;
     let selected_type = COMMIT_TYPES
         .iter()
@@ -144,5 +185,46 @@ mod tests {
             ..Config::default()
         };
         assert!(!needs_setup(&config));
+    }
+
+    #[test]
+    fn test_available_providers_contains_claude_and_gemini() {
+        let providers = available_providers();
+        assert!(providers.contains(&"claude"));
+        assert!(providers.contains(&"gemini"));
+    }
+
+    #[test]
+    fn test_available_provider_labels_match_count() {
+        assert_eq!(available_providers().len(), available_provider_labels().len());
+    }
+
+    #[test]
+    fn test_find_provider_claude() {
+        let p = find_provider("claude").unwrap();
+        assert_eq!(p.key, "claude");
+        assert!(!p.models.is_empty());
+        assert!(p.models.contains(&"claude-sonnet-4-6-20250514"));
+    }
+
+    #[test]
+    fn test_find_provider_gemini() {
+        let p = find_provider("gemini").unwrap();
+        assert_eq!(p.key, "gemini");
+        assert!(!p.models.is_empty());
+        assert!(p.models.contains(&"gemini-2.5-flash"));
+    }
+
+    #[test]
+    fn test_find_provider_unknown_returns_none() {
+        assert!(find_provider("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_find_provider_by_label() {
+        let p = find_provider_by_label("Claude (Anthropic)").unwrap();
+        assert_eq!(p.key, "claude");
+        let p = find_provider_by_label("Gemini (Google)").unwrap();
+        assert_eq!(p.key, "gemini");
     }
 }

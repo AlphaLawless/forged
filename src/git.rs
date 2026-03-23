@@ -36,7 +36,7 @@ fn run_git(args: &[&str]) -> Result<String> {
         bail!("git {} failed: {}", args.join(" "), stderr.trim());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_string())
 }
 
 /// Run git with -C <dir> to target a specific repo path.
@@ -114,8 +114,14 @@ pub fn truncate_diff(diff: &str) -> String {
     }
 }
 
+/// Result of a commit attempt.
+pub enum CommitResult {
+    Success,
+    HookFailed,
+}
+
 /// Commit with the given message.
-pub fn commit(message: &str, no_verify: bool, extra_args: &[String]) -> Result<()> {
+pub fn commit(message: &str, no_verify: bool, extra_args: &[String]) -> Result<CommitResult> {
     let mut args: Vec<&str> = vec!["commit"];
 
     if let Some((subject, body)) = message.split_once("\n\n") {
@@ -133,13 +139,84 @@ pub fn commit(message: &str, no_verify: bool, extra_args: &[String]) -> Result<(
 
     let output = Command::new("git")
         .args(&args)
-        .status()
+        .output()
         .context("Failed to run git commit")?;
 
-    if !output.success() {
-        bail!("git commit failed");
+    if output.status.success() {
+        return Ok(CommitResult::Success);
     }
 
+    // Non-zero exit usually means pre-commit hook failure
+    let code = output.status.code().unwrap_or(1);
+    if code == 1 {
+        return Ok(CommitResult::HookFailed);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    bail!("git commit failed (exit {}): {}", code, stderr.trim());
+}
+
+/// Represents an unstaged file change.
+#[derive(Debug, Clone)]
+pub struct UnstagedFile {
+    pub status: String,
+    pub path: String,
+}
+
+/// Get list of unstaged/untracked changes via `git status --porcelain`.
+pub fn unstaged_changes() -> Result<Vec<UnstagedFile>> {
+    unstaged_changes_impl(None)
+}
+
+fn unstaged_changes_impl(dir: Option<&Path>) -> Result<Vec<UnstagedFile>> {
+    let output = match dir {
+        Some(d) => run_git_in(d, &["status", "--porcelain"])?,
+        None => run_git(&["status", "--porcelain"])?,
+    };
+
+    if output.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let files = output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter_map(|line| {
+            if line.len() < 4 {
+                return None;
+            }
+            let xy = &line[0..2];
+            let path = line[3..].to_string();
+
+            // git status --porcelain: XY where X=staged, Y=unstaged
+            // We want files with unstaged changes (Y column) or untracked (??)
+            let x = xy.as_bytes()[0];
+            let y = xy.as_bytes()[1];
+
+            let status = if x == b'?' && y == b'?' {
+                "new file"
+            } else if y == b'M' {
+                "modified"
+            } else if y == b'D' {
+                "deleted"
+            } else {
+                // Fully staged or unchanged, skip
+                return None;
+            };
+
+            Some(UnstagedFile {
+                status: status.to_string(),
+                path,
+            })
+        })
+        .collect();
+
+    Ok(files)
+}
+
+/// Stage all changes (tracked + untracked).
+pub fn stage_all() -> Result<()> {
+    run_git(&["add", "-A"])?;
     Ok(())
 }
 
@@ -205,6 +282,55 @@ mod tests {
         let staged = result.unwrap();
         assert!(staged.files.contains(&"test.txt".to_string()));
         assert!(staged.diff.contains("hello"));
+    }
+
+    #[test]
+    fn test_unstaged_changes_detects_modified_files() {
+        let dir = setup_git_repo();
+        let path = dir.path();
+
+        // Create initial commit
+        std::fs::write(path.join("file.txt"), "initial").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(path).output().unwrap();
+        Command::new("git").args(["commit", "-m", "init"]).current_dir(path).output().unwrap();
+
+        // Modify file without staging
+        std::fs::write(path.join("file.txt"), "changed").unwrap();
+
+        let changes = unstaged_changes_impl(Some(path)).unwrap();
+        assert!(!changes.is_empty());
+        assert!(changes.iter().any(|f| f.path == "file.txt" && f.status == "modified"));
+    }
+
+    #[test]
+    fn test_unstaged_changes_detects_new_files() {
+        let dir = setup_git_repo();
+        let path = dir.path();
+
+        // Create initial commit
+        std::fs::write(path.join("existing.txt"), "hi").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(path).output().unwrap();
+        Command::new("git").args(["commit", "-m", "init"]).current_dir(path).output().unwrap();
+
+        // Add untracked file
+        std::fs::write(path.join("new_file.txt"), "new").unwrap();
+
+        let changes = unstaged_changes_impl(Some(path)).unwrap();
+        assert!(changes.iter().any(|f| f.path == "new_file.txt" && f.status == "new file"));
+    }
+
+    #[test]
+    fn test_unstaged_changes_empty_when_clean() {
+        let dir = setup_git_repo();
+        let path = dir.path();
+
+        // Create initial commit with everything staged
+        std::fs::write(path.join("file.txt"), "content").unwrap();
+        Command::new("git").args(["add", "."]).current_dir(path).output().unwrap();
+        Command::new("git").args(["commit", "-m", "init"]).current_dir(path).output().unwrap();
+
+        let changes = unstaged_changes_impl(Some(path)).unwrap();
+        assert!(changes.is_empty());
     }
 
     #[test]

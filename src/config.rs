@@ -54,7 +54,7 @@ impl Default for Config {
             commit_type: CommitType::Plain,
             max_length: 72,
             generate: 1,
-            timeout: 10,
+            timeout: 0, // 0 = use provider's default timeout
         }
     }
 }

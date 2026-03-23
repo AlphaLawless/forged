@@ -17,6 +17,11 @@ pub trait AiProvider: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &str;
     fn default_model(&self) -> &str;
 
+    /// Default timeout in seconds for this provider.
+    fn default_timeout(&self) -> u64 {
+        30
+    }
+
     /// Send a single completion request and return the raw response text.
     async fn complete(
         &self,

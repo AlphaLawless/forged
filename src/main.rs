@@ -1,6 +1,7 @@
 #![allow(dead_code)] // Functions are public API; not all called from main yet during development
 
 mod ai;
+mod clipboard;
 mod commands;
 mod config;
 mod git;
