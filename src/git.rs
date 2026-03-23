@@ -220,6 +220,18 @@ pub fn stage_all() -> Result<()> {
     Ok(())
 }
 
+/// Stage specific files.
+pub fn stage_files(files: &[String]) -> Result<()> {
+    if files.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec!["add", "--"];
+    let refs: Vec<&str> = files.iter().map(|s| s.as_str()).collect();
+    args.extend(refs);
+    run_git(&args)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

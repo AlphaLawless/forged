@@ -281,7 +281,8 @@ fn copy_to_clipboard(message: &str) -> Result<()> {
     Ok(())
 }
 
-/// Show unstaged changes and offer to stage them. Returns true if staging happened.
+/// Show unstaged changes and let the user pick which files to stage.
+/// Returns true if at least one file was staged.
 fn offer_stage_changes() -> Result<bool> {
     let changes = git::unstaged_changes().unwrap_or_default();
 
@@ -292,33 +293,56 @@ fn offer_stage_changes() -> Result<bool> {
         return Ok(false);
     }
 
-    println!("{} No staged changes found, but you have unstaged changes:\n", "⚠".yellow());
-    for file in &changes {
-        let status_colored = match file.status.as_str() {
-            "modified" => format!("{:>12}", file.status).yellow().to_string(),
-            "new file" => format!("{:>12}", file.status).green().to_string(),
-            "deleted" => format!("{:>12}", file.status).red().to_string(),
-            _ => format!("{:>12}", file.status),
-        };
-        println!("  {}: {}", status_colored, file.path);
-    }
-    println!();
+    println!("{} No staged changes found.\n", "⚠".yellow());
 
-    let stage = inquire::Confirm::new("Stage all changes and continue?")
-        .with_default(true)
+    // Build labels: "[M] src/main.rs"
+    let labels: Vec<String> = changes
+        .iter()
+        .map(|f| {
+            let tag = match f.status.as_str() {
+                "modified" => "[M]",
+                "new file" => "[N]",
+                "deleted" => "[D]",
+                _ => "[?]",
+            };
+            format!("{} {}", tag, f.path)
+        })
+        .collect();
+
+    let selected = inquire::MultiSelect::new("Stage files:", labels.clone())
+        .with_all_selected_by_default()
+        .with_page_size(20)
         .prompt()?;
 
-    if !stage {
+    if selected.is_empty() {
         println!();
-        println!("  {} Stage files manually:", "tip:".dimmed());
-        println!("    git add <file>       Stage specific files");
-        println!("    git add -A           Stage everything");
-        println!("    forged --all         Auto-stage tracked files");
+        println!("  {} No files selected.", "tip:".dimmed());
         return Ok(false);
     }
 
-    git::stage_all()?;
-    println!("{} Staged {} file(s)", "✔".green(), changes.len());
+    // Map selected labels back to file paths
+    let selected_paths: Vec<String> = selected
+        .iter()
+        .filter_map(|label| {
+            // Find the matching change by label
+            labels.iter().zip(changes.iter()).find_map(|(l, c)| {
+                if l == label { Some(c.path.clone()) } else { None }
+            })
+        })
+        .collect();
+
+    if selected_paths.len() == changes.len() {
+        git::stage_all()?;
+    } else {
+        git::stage_files(&selected_paths)?;
+    }
+
+    println!(
+        "{} Staged {} of {} file(s)",
+        "✔".green(),
+        selected_paths.len(),
+        changes.len()
+    );
 
     Ok(true)
 }
