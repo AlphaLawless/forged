@@ -212,6 +212,18 @@ forged/
 
 ---
 
+### Fase 13 — Subject+Body 2-Step Generation [DONE]
+- [x] `generate_description()` em `provider.rs` — chamada única à IA com subject+diff, sanitiza com `sanitize_description()`
+- [x] `generate_full_messages()` em `commit.rs` — orquestra 2 passos quando `commit_type == SubjectBody`
+- [x] `combine_subject_body()` — combina subject + `\n\n` + body (body vazio = só subject)
+- [x] Regenerate usa o mesmo fluxo de 2 passos
+
+**Testes novos (4):**
+- provider.rs: `test_generate_description_returns_sanitized_body`, `test_generate_description_includes_subject_in_user_prompt`
+- commit.rs: `test_combine_subject_body_joins_with_blank_line`, `test_combine_subject_body_empty_body_returns_subject_only`
+
+---
+
 ## Contagem de Testes Atual
 
 | Módulo | Testes |
@@ -220,22 +232,22 @@ forged/
 | git.rs | 9 |
 | prompt.rs | 9 |
 | ai/sanitize.rs | 17 |
-| ai/provider.rs | 3 |
+| ai/provider.rs | 5 |
 | ai/providers/claude.rs | 6 |
 | ai/providers/gemini.rs | 6 |
 | ai/mod.rs | 5 |
 | commands/setup.rs | 8 |
-| commands/commit.rs | 2 |
+| commands/commit.rs | 4 |
 | commands/config.rs | 4 |
 | clipboard.rs | 2 |
 | main.rs (CLI) | 4 |
-| **Total** | **84 (todos passando)** |
+| **Total** | **88 (todos passando)** |
 
 ---
 
 ## Pendências
 
-- [ ] subject+body generation em 2 passos (subject → description com context)
+- [x] subject+body generation em 2 passos (subject → description com context)
 - [ ] Git hook integration (`forged hook install/uninstall`, prepare-commit-msg)
 - [ ] Testes de integração em `tests/`
 - [ ] CI pipeline (`cargo test` + `cargo clippy` + `cargo fmt --check`)

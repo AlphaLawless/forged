@@ -2,7 +2,8 @@ use anyhow::{Result, bail};
 use colored::Colorize;
 
 use crate::ai;
-use crate::ai::provider::{GenerateOpts, generate_messages};
+use crate::ai::provider::{GenerateOpts, generate_description, generate_messages};
+use crate::config::CommitType;
 use crate::clipboard;
 use crate::config::Config;
 use crate::git;
@@ -72,7 +73,7 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
     let provider = ai::build_provider(&config)?;
 
     let commit_type = if let Some(ref t) = opts.commit_type {
-        crate::config::CommitType::from_str_loose(t)?
+        CommitType::from_str_loose(t)?
     } else {
         config.commit_type.clone()
     };
@@ -116,11 +117,24 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
         );
     }
 
-    let messages = generate_messages(provider.as_ref(), &system, &diff, &gen_opts).await?;
+    let desc_system = if commit_type == CommitType::SubjectBody {
+        Some(prompt::build_description_prompt(
+            &config.locale,
+            config.max_length,
+            opts.custom_prompt.as_deref(),
+        ))
+    } else {
+        None
+    };
 
-    if messages.is_empty() {
-        bail!("No commit messages were generated. Try again.");
-    }
+    let messages = generate_full_messages(
+        provider.as_ref(),
+        &system,
+        desc_system.as_deref(),
+        &diff,
+        &gen_opts,
+    )
+    .await?;
 
     // Headless mode: output and exit
     if headless {
@@ -183,11 +197,14 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
             }
             Action::Regenerate => {
                 println!("{} Regenerating...", "::".dimmed());
-                current_messages =
-                    generate_messages(provider.as_ref(), &system, &diff, &gen_opts).await?;
-                if current_messages.is_empty() {
-                    bail!("No commit messages were generated. Try again.");
-                }
+                current_messages = generate_full_messages(
+                    provider.as_ref(),
+                    &system,
+                    desc_system.as_deref(),
+                    &diff,
+                    &gen_opts,
+                )
+                .await?;
                 continue;
             }
             Action::Cancel => {
@@ -196,6 +213,43 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
             }
         }
     }
+}
+
+// --- Subject+Body helpers ---
+
+/// Generate commit messages. When `desc_system` is Some (subject+body mode),
+/// generates subjects first, then a body for each, and combines them.
+async fn generate_full_messages(
+    provider: &dyn crate::ai::provider::AiProvider,
+    system: &str,
+    desc_system: Option<&str>,
+    diff: &str,
+    opts: &GenerateOpts,
+) -> Result<Vec<String>> {
+    let subjects = generate_messages(provider, system, diff, opts).await?;
+
+    if subjects.is_empty() {
+        bail!("No commit messages were generated. Try again.");
+    }
+
+    let Some(desc_sys) = desc_system else {
+        return Ok(subjects);
+    };
+
+    // 2-step: generate body for each subject
+    let mut full_messages = Vec::with_capacity(subjects.len());
+    for subject in &subjects {
+        let body = generate_description(provider, desc_sys, subject, diff, opts).await?;
+        full_messages.push(combine_subject_body(subject, &body));
+    }
+    Ok(full_messages)
+}
+
+fn combine_subject_body(subject: &str, body: &str) -> String {
+    if body.is_empty() {
+        return subject.to_string();
+    }
+    format!("{subject}\n\n{body}")
 }
 
 // --- Action menu ---
@@ -364,5 +418,17 @@ mod tests {
         let messages = vec!["feat: add login".to_string()];
         let result = pick_message(&messages).unwrap();
         assert_eq!(result, Some("feat: add login".to_string()));
+    }
+
+    #[test]
+    fn test_combine_subject_body_joins_with_blank_line() {
+        let result = combine_subject_body("feat: add auth", "- Add OAuth2\n- Add token refresh");
+        assert_eq!(result, "feat: add auth\n\n- Add OAuth2\n- Add token refresh");
+    }
+
+    #[test]
+    fn test_combine_subject_body_empty_body_returns_subject_only() {
+        let result = combine_subject_body("feat: add auth", "");
+        assert_eq!(result, "feat: add auth");
     }
 }

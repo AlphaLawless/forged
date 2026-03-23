@@ -31,6 +31,20 @@ pub trait AiProvider: Send + Sync + std::fmt::Debug {
     ) -> Result<String>;
 }
 
+/// Generate a commit body (description) for a given subject line.
+/// Makes a single AI call with the subject + diff as context, then sanitizes.
+pub async fn generate_description(
+    provider: &dyn AiProvider,
+    system: &str,
+    subject: &str,
+    diff: &str,
+    opts: &GenerateOpts,
+) -> Result<String> {
+    let user_prompt = format!("Title: {subject}\n\nDiff:\n{diff}");
+    let raw = provider.complete(system, &user_prompt, opts).await?;
+    Ok(sanitize::sanitize_description(&raw))
+}
+
 /// Generate N messages in parallel, sanitize, and deduplicate.
 pub async fn generate_messages(
     provider: &dyn AiProvider,
@@ -140,5 +154,43 @@ mod tests {
         };
         let result = generate_messages(&provider, "sys", "diff", &test_opts(1)).await.unwrap();
         assert_eq!(result[0], "feat: add login");
+    }
+
+    #[tokio::test]
+    async fn test_generate_description_returns_sanitized_body() {
+        let provider = MockProvider {
+            responses: vec!["<think>ok</think>- Add OAuth2 provider\n- Implement token refresh".into()],
+        };
+        let result = generate_description(&provider, "sys", "feat: add auth", "diff content", &test_opts(1)).await.unwrap();
+        assert!(result.contains("Add OAuth2 provider"));
+        assert!(result.contains("Implement token refresh"));
+        assert!(!result.contains("<think>"));
+    }
+
+    #[derive(Debug)]
+    struct CapturingProvider {
+        captured_user: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl AiProvider for CapturingProvider {
+        fn name(&self) -> &str { "capture" }
+        fn default_model(&self) -> &str { "capture-1" }
+        async fn complete(&self, _system: &str, user: &str, _opts: &GenerateOpts) -> Result<String> {
+            self.captured_user.lock().unwrap().push(user.to_string());
+            Ok("- Some change".to_string())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_generate_description_includes_subject_in_user_prompt() {
+        let provider = CapturingProvider {
+            captured_user: std::sync::Mutex::new(Vec::new()),
+        };
+        generate_description(&provider, "sys", "feat: add login", "diff here", &test_opts(1)).await.unwrap();
+        let captured = provider.captured_user.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert!(captured[0].contains("Title: feat: add login"));
+        assert!(captured[0].contains("Diff:\ndiff here"));
     }
 }
