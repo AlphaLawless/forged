@@ -24,7 +24,6 @@ Download the latest binary for your platform from [Releases](https://github.com/
 | Linux aarch64 | `forged-linux-aarch64.tar.gz` |
 | macOS x86_64 | `forged-darwin-x86_64.tar.gz` |
 | macOS Apple Silicon | `forged-darwin-aarch64.tar.gz` |
-| Windows x86_64 | `forged-windows-x86_64.zip` |
 
 ### From source
 
