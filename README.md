@@ -145,7 +145,7 @@ feat: add OAuth2 login flow
 |--------|---------|
 | `plain` | `add user authentication` |
 | `conventional` | `feat: add user authentication` |
-| `gitmoji` | `:sparkles: add user authentication` |
+| `gitmoji` | `✨ add user authentication` |
 | `subject+body` | Subject line + detailed bullet points (2-step AI generation) |
 
 ## Config file
