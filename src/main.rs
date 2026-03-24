@@ -38,6 +38,10 @@ struct Cli {
     /// Custom prompt to guide the LLM
     #[arg(short, long)]
     prompt: Option<String>,
+
+    /// Write AI message to file (used by git hook, not for direct use)
+    #[arg(long, hide = true)]
+    hook: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -49,6 +53,27 @@ enum Commands {
     },
     /// Run the interactive setup wizard
     Setup,
+    /// Manage git hook integration
+    Hook {
+        #[command(subcommand)]
+        action: HookAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum HookAction {
+    /// Install the prepare-commit-msg hook
+    Install {
+        /// Overwrite existing hook even if not created by forged
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+    /// Remove the prepare-commit-msg hook
+    Uninstall {
+        /// Remove hook even if not created by forged
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -75,6 +100,10 @@ async fn main() {
             let existing = config::Config::load().ok();
             commands::setup::run(existing).map(|_| ())
         }
+        Some(Commands::Hook { action }) => match action {
+            HookAction::Install { force } => commands::hook::install(force),
+            HookAction::Uninstall { force } => commands::hook::uninstall(force),
+        },
         None => {
             commands::commit::run(commands::commit::CommitOpts {
                 generate: cli.generate,
@@ -85,6 +114,7 @@ async fn main() {
                 clipboard: cli.clipboard,
                 no_verify: cli.no_verify,
                 custom_prompt: cli.prompt,
+                hook_file: cli.hook,
                 extra_args: vec![],
             })
             .await

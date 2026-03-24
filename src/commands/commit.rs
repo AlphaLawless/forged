@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
 use crate::ai;
@@ -18,6 +18,7 @@ pub struct CommitOpts {
     pub clipboard: bool,
     pub no_verify: bool,
     pub custom_prompt: Option<String>,
+    pub hook_file: Option<String>,
     pub extra_args: Vec<String>,
 }
 
@@ -113,6 +114,13 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
         &params.gen_opts,
     )
     .await?;
+
+    // Hook mode: write message to file and exit
+    if let Some(ref hook_file) = opts.hook_file {
+        std::fs::write(hook_file, &messages[0])
+            .with_context(|| format!("Failed to write hook file: {hook_file}"))?;
+        return Ok(());
+    }
 
     // Headless mode: output and exit
     if headless {

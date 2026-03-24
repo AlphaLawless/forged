@@ -250,6 +250,19 @@ forged/
 
 ---
 
+### Fase 16 — Git Hook Integration [DONE]
+- [x] `src/commands/hook.rs` — install/uninstall com marker detection e --force
+- [x] Hook script `prepare-commit-msg` — fail-safe (|| true), skips merge/amend, checks forged in PATH
+- [x] Flag `--hook <file>` (hidden) — modo headless que escreve mensagem no arquivo
+- [x] Subcomando `forged hook install/uninstall` com `--force`
+- [x] `hook_file` field no `CommitOpts` + early return no `run()`
+
+**Testes novos:**
+- hook.rs (6 unit): script content, marker, shell validity, fail-safe, merge/amend skip, detection
+- tests/git_hook.rs (6 integration): install executable, uninstall, refuse non-forged, force overwrite, refuse uninstall non-forged, reinstall update
+
+---
+
 ## Contagem de Testes Atual
 
 | Módulo | Testes |
@@ -264,10 +277,11 @@ forged/
 | ai/mod.rs | 5 |
 | commands/setup.rs | 8 |
 | commands/commit.rs | 8 |
+| commands/hook.rs | 6 |
 | commands/config.rs | 4 |
 | clipboard.rs | 2 |
 | main.rs (CLI) | 4 |
-| **Total unitários** | **92** |
+| **Total unitários** | **98** |
 
 ### Testes de Integração (`tests/`)
 
@@ -277,21 +291,30 @@ forged/
 | tests/full_flow.rs | 3 |
 | tests/generate_pipeline.rs | 4 |
 | tests/provider_http.rs | 4 |
-| **Total integração** | **16** |
+| tests/git_hook.rs | 6 |
+| **Total integração** | **22** |
 
-| **Total geral** | **108 (todos passando)** |
+| **Total geral** | **120 (todos passando)** |
 
 ---
 
 ## Pendências
 
+### Concluídas nesta sessão
 - [x] subject+body generation em 2 passos (subject → description com context)
-- [x] Testes de integração em `tests/`
-- [ ] Git hook integration (`forged hook install/uninstall`, prepare-commit-msg)
+- [x] Testes de integração em `tests/` (16 testes: git_commit, full_flow, generate_pipeline, provider_http)
+- [x] Session settings buffer (menu "Settings" no action menu para alterar locale/type/max_length/generate temporariamente)
+- [x] Fix cursor do Password no setup wizard (PasswordDisplayMode::Masked)
+- [x] `src/lib.rs` criado para expor módulos publicamente
+
+### Próximas
+- [x] Git hook integration (`forged hook install/uninstall`, prepare-commit-msg)
 - [ ] CI pipeline (`cargo test` + `cargo clippy` + `cargo fmt --check`)
-- [ ] Futuro: providers OpenRouter, ChatGPT (OpenAI)
-- [ ] Futuro: large diff chunking (>50 files → chunks de 10 → combine)
-- [ ] Futuro: auto-update via crates.io
+
+### Futuro
+- [ ] Providers OpenRouter, ChatGPT (OpenAI)
+- [ ] Large diff chunking (>50 files → chunks de 10 → combine)
+- [ ] Auto-update via crates.io
 
 ---
 
