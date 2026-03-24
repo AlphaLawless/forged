@@ -224,6 +224,17 @@ forged/
 
 ---
 
+### Fase 14 — Testes de Integração [DONE]
+- [x] `src/lib.rs` criado para expor módulos publicamente (necessário para `tests/`)
+- [x] `src/main.rs` atualizado para `use forged::{commands, config}`
+- [x] `tests/git_commit.rs` — 5 testes: single-line, subject+body, hook failure, no-verify, extra args
+- [x] `tests/full_flow.rs` — 3 testes: plain commit, subject+body commit, sanitization chain (config → git → mock AI → commit)
+- [x] `tests/generate_pipeline.rs` — 4 testes: plain subjects, subject+body pipeline, dedup, empty body
+- [x] `tests/provider_http.rs` — 4 testes: Claude/Gemini full JSON roundtrip, Claude/Gemini timeout enforcement
+- [x] `serial_test` adicionado como dev-dependency para testes que alteram CWD
+
+---
+
 ## Contagem de Testes Atual
 
 | Módulo | Testes |
@@ -241,15 +252,27 @@ forged/
 | commands/config.rs | 4 |
 | clipboard.rs | 2 |
 | main.rs (CLI) | 4 |
-| **Total** | **88 (todos passando)** |
+| **Total unitários** | **88** |
+
+### Testes de Integração (`tests/`)
+
+| Arquivo | Testes |
+|---|---|
+| tests/git_commit.rs | 5 |
+| tests/full_flow.rs | 3 |
+| tests/generate_pipeline.rs | 4 |
+| tests/provider_http.rs | 4 |
+| **Total integração** | **16** |
+
+| **Total geral** | **104 (todos passando)** |
 
 ---
 
 ## Pendências
 
 - [x] subject+body generation em 2 passos (subject → description com context)
+- [x] Testes de integração em `tests/`
 - [ ] Git hook integration (`forged hook install/uninstall`, prepare-commit-msg)
-- [ ] Testes de integração em `tests/`
 - [ ] CI pipeline (`cargo test` + `cargo clippy` + `cargo fmt --check`)
 - [ ] Futuro: providers OpenRouter, ChatGPT (OpenAI)
 - [ ] Futuro: large diff chunking (>50 files → chunks de 10 → combine)
