@@ -317,6 +317,22 @@ forged/
 - [x] README atualizado com todas as opções de instalação
 
 ### Futuro
+
+#### Multi-provider com failover
+- [ ] Suporte a múltiplos providers configurados simultaneamente (lista ordenada por prioridade)
+- [ ] Failover automático: se provider primário falha (429 rate limit, timeout, 5xx), tenta o próximo
+- [ ] Config: `providers=claude,gemini` (lista separada por vírgula, cada um com sua api_key)
+- [ ] Retry inteligente: distinguir erros retryáveis (429, timeout) de fatais (401 invalid key)
+- [ ] Log de qual provider foi usado: `:: Generated with claude-sonnet-4-6 (fallback: gemini-2.5-flash)`
+
+#### LLMs locais
+- [ ] Provider `local` via endpoint OpenAI-compatible (Ollama, llama.cpp, LM Studio, vLLM)
+- [ ] Config: `local_endpoint=http://localhost:11434/v1` (default Ollama)
+- [ ] Auto-detect: tentar `http://localhost:11434` se nenhum provider cloud configurado
+- [ ] Listar modelos disponíveis via `/v1/models` no setup wizard
+- [ ] Zero API key necessária — funciona offline
+
+#### Outros
 - [ ] Providers OpenRouter, ChatGPT (OpenAI)
 - [ ] Large diff chunking (>50 files → chunks de 10 → combine)
 

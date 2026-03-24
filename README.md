@@ -185,6 +185,8 @@ timeout=0
 
 ### Planned
 
+- [ ] Multi-provider with failover (configure multiple providers, auto-fallback on rate limit/timeout)
+- [ ] Local LLM support (Ollama, llama.cpp, LM Studio — works offline, no API key needed)
 - [ ] OpenRouter and ChatGPT providers
 - [ ] Large diff chunking (50+ files)
 
