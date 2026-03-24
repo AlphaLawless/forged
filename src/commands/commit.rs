@@ -72,25 +72,17 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
 
     let provider = ai::build_provider(&config)?;
 
-    let commit_type = if let Some(ref t) = opts.commit_type {
-        CommitType::from_str_loose(t)?
-    } else {
-        config.commit_type.clone()
-    };
+    let mut session = SessionConfig::from_config(
+        &config,
+        opts.commit_type.as_deref(),
+        opts.generate,
+    )?;
 
-    let generate = opts.generate.unwrap_or(config.generate);
     let model = if config.model.is_empty() {
         provider.default_model().to_string()
     } else {
         config.model.clone()
     };
-
-    let system = prompt::build_system_prompt(
-        &config.locale,
-        config.max_length,
-        &commit_type,
-        opts.custom_prompt.as_deref(),
-    );
 
     let diff = git::truncate_diff(&staged.diff);
 
@@ -100,13 +92,7 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
         provider.default_timeout()
     };
 
-    let gen_opts = GenerateOpts {
-        model,
-        temperature: 0.4,
-        max_tokens: 2000,
-        completions: generate,
-        timeout_secs: timeout,
-    };
+    let custom_prompt = opts.custom_prompt.as_deref();
 
     if !headless {
         println!(
@@ -117,22 +103,14 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
         );
     }
 
-    let desc_system = if commit_type == CommitType::SubjectBody {
-        Some(prompt::build_description_prompt(
-            &config.locale,
-            config.max_length,
-            opts.custom_prompt.as_deref(),
-        ))
-    } else {
-        None
-    };
+    let params = build_generation_params(&session, &model, timeout, custom_prompt);
 
     let messages = generate_full_messages(
         provider.as_ref(),
-        &system,
-        desc_system.as_deref(),
+        &params.system,
+        params.desc_system.as_deref(),
         &diff,
-        &gen_opts,
+        &params.gen_opts,
     )
     .await?;
 
@@ -189,22 +167,38 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
                         println!("Commit cancelled.");
                         return Ok(());
                     }
-                    Action::Edit | Action::Regenerate => {
-                        // Let the outer loop handle regenerate or another edit
+                    Action::Edit | Action::Regenerate | Action::Settings => {
+                        // Let the outer loop handle regenerate, settings, or another edit
                         continue;
                     }
                 }
             }
             Action::Regenerate => {
+                let params = build_generation_params(&session, &model, timeout, custom_prompt);
                 println!("{} Regenerating...", "::".dimmed());
                 current_messages = generate_full_messages(
                     provider.as_ref(),
-                    &system,
-                    desc_system.as_deref(),
+                    &params.system,
+                    params.desc_system.as_deref(),
                     &diff,
-                    &gen_opts,
+                    &params.gen_opts,
                 )
                 .await?;
+                continue;
+            }
+            Action::Settings => {
+                if settings_menu(&mut session)? {
+                    let params = build_generation_params(&session, &model, timeout, custom_prompt);
+                    println!("{} Regenerating with new settings...", "::".dimmed());
+                    current_messages = generate_full_messages(
+                        provider.as_ref(),
+                        &params.system,
+                        params.desc_system.as_deref(),
+                        &diff,
+                        &params.gen_opts,
+                    )
+                    .await?;
+                }
                 continue;
             }
             Action::Cancel => {
@@ -213,6 +207,74 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
             }
         }
     }
+}
+
+// --- Session config buffer ---
+
+/// Ephemeral settings that can be changed during the interactive session.
+/// Initialized from Config + CLI overrides, never persisted.
+#[derive(Debug, Clone)]
+struct SessionConfig {
+    locale: String,
+    commit_type: CommitType,
+    max_length: u32,
+    generate: u8,
+}
+
+impl SessionConfig {
+    fn from_config(config: &Config, commit_type_override: Option<&str>, generate_override: Option<u8>) -> Result<Self> {
+        let commit_type = if let Some(t) = commit_type_override {
+            CommitType::from_str_loose(t)?
+        } else {
+            config.commit_type.clone()
+        };
+        Ok(Self {
+            locale: config.locale.clone(),
+            commit_type,
+            max_length: config.max_length,
+            generate: generate_override.unwrap_or(config.generate),
+        })
+    }
+}
+
+struct GenerationParams {
+    system: String,
+    desc_system: Option<String>,
+    gen_opts: GenerateOpts,
+}
+
+fn build_generation_params(
+    session: &SessionConfig,
+    model: &str,
+    timeout: u64,
+    custom_prompt: Option<&str>,
+) -> GenerationParams {
+    let system = prompt::build_system_prompt(
+        &session.locale,
+        session.max_length,
+        &session.commit_type,
+        custom_prompt,
+    );
+
+    let desc_system = if session.commit_type == CommitType::SubjectBody {
+        Some(prompt::build_description_prompt(
+            &session.locale,
+            session.max_length,
+            custom_prompt,
+        ))
+    } else {
+        None
+    };
+
+    let gen_opts = GenerateOpts {
+        model: model.to_string(),
+        temperature: 0.4,
+        max_tokens: 2000,
+        completions: session.generate,
+        timeout_secs: timeout,
+    };
+
+    GenerationParams { system, desc_system, gen_opts }
 }
 
 // --- Subject+Body helpers ---
@@ -259,12 +321,14 @@ enum Action {
     Commit,
     Edit,
     Regenerate,
+    Settings,
     Cancel,
 }
 
 const ACTION_COMMIT: &str = "Commit this message";
 const ACTION_EDIT: &str = "Edit message";
 const ACTION_REGENERATE: &str = "Regenerate";
+const ACTION_SETTINGS: &str = "Settings";
 const ACTION_CANCEL: &str = "Cancel";
 
 const ACTION_COPY: &str = "Copy to clipboard";
@@ -278,7 +342,7 @@ fn action_menu(message: &str, clipboard_mode: bool) -> Result<Action> {
     } else {
         options.push(ACTION_COMMIT);
     }
-    options.extend([ACTION_EDIT, ACTION_REGENERATE, ACTION_CANCEL]);
+    options.extend([ACTION_EDIT, ACTION_REGENERATE, ACTION_SETTINGS, ACTION_CANCEL]);
 
     let choice = inquire::Select::new("What do you want to do?", options)
         .with_page_size(10)
@@ -288,9 +352,119 @@ fn action_menu(message: &str, clipboard_mode: bool) -> Result<Action> {
         ACTION_COMMIT | ACTION_COPY => Ok(Action::Commit),
         ACTION_EDIT => Ok(Action::Edit),
         ACTION_REGENERATE => Ok(Action::Regenerate),
+        ACTION_SETTINGS => Ok(Action::Settings),
         ACTION_CANCEL => Ok(Action::Cancel),
         _ => Ok(Action::Cancel),
     }
+}
+
+// --- Settings menu ---
+
+const COMMIT_TYPE_OPTIONS: &[(&str, &str)] = &[
+    ("conventional", "conventional  — feat: / fix: / refactor: ..."),
+    ("plain", "plain         — free-form message"),
+    ("gitmoji", "gitmoji       — :emoji: message"),
+    ("subject+body", "subject+body  — title + detailed description"),
+];
+
+const SETTING_LOCALE: &str = "locale";
+const SETTING_TYPE: &str = "type";
+const SETTING_MAX_LENGTH: &str = "max_length";
+const SETTING_GENERATE: &str = "generate";
+const SETTING_BACK: &str = "← Back";
+
+/// Show session settings and let the user edit them interactively.
+/// Returns `true` if any setting was changed.
+fn settings_menu(session: &mut SessionConfig) -> Result<bool> {
+    let mut changed = false;
+
+    loop {
+        println!();
+        println!("  {}", "Session settings:".dimmed());
+        println!("    locale     = {}", session.locale);
+        println!("    type       = {}", session.commit_type.as_str());
+        println!("    max_length = {}", session.max_length);
+        println!("    generate   = {}", session.generate);
+        println!();
+
+        let options = vec![SETTING_LOCALE, SETTING_TYPE, SETTING_MAX_LENGTH, SETTING_GENERATE, SETTING_BACK];
+        let choice = inquire::Select::new("Change setting:", options)
+            .with_page_size(10)
+            .prompt()?;
+
+        match choice {
+            SETTING_LOCALE => {
+                let value = inquire::Text::new("Locale:")
+                    .with_default(&session.locale)
+                    .with_help_message("e.g. en, pt-br, ja, es")
+                    .prompt()?;
+                if value != session.locale {
+                    session.locale = value;
+                    changed = true;
+                    println!("  {} locale → {}", "✔".green(), session.locale);
+                }
+            }
+            SETTING_TYPE => {
+                let labels: Vec<&str> = COMMIT_TYPE_OPTIONS.iter().map(|(_, l)| *l).collect();
+                let current_idx = COMMIT_TYPE_OPTIONS
+                    .iter()
+                    .position(|(k, _)| *k == session.commit_type.as_str())
+                    .unwrap_or(0);
+                let selected = inquire::Select::new("Commit type:", labels)
+                    .with_starting_cursor(current_idx)
+                    .with_page_size(10)
+                    .prompt()?;
+                let key = COMMIT_TYPE_OPTIONS
+                    .iter()
+                    .find(|(_, l)| *l == selected)
+                    .map(|(k, _)| *k)
+                    .unwrap_or("conventional");
+                let new_type = CommitType::from_str_loose(key)?;
+                if new_type != session.commit_type {
+                    session.commit_type = new_type;
+                    changed = true;
+                    println!("  {} type → {}", "✔".green(), session.commit_type.as_str());
+                }
+            }
+            SETTING_MAX_LENGTH => {
+                let value = inquire::Text::new("Max length:")
+                    .with_default(&session.max_length.to_string())
+                    .prompt()?;
+                match value.trim().parse::<u32>() {
+                    Ok(n) if n >= 20 => {
+                        if n != session.max_length {
+                            session.max_length = n;
+                            changed = true;
+                            println!("  {} max_length → {}", "✔".green(), n);
+                        }
+                    }
+                    _ => {
+                        println!("  {} Must be a number ≥ 20", "⚠".yellow());
+                    }
+                }
+            }
+            SETTING_GENERATE => {
+                let value = inquire::Text::new("Generate count (1-5):")
+                    .with_default(&session.generate.to_string())
+                    .prompt()?;
+                match value.trim().parse::<u8>() {
+                    Ok(n) if (1..=5).contains(&n) => {
+                        if n != session.generate {
+                            session.generate = n;
+                            changed = true;
+                            println!("  {} generate → {}", "✔".green(), n);
+                        }
+                    }
+                    _ => {
+                        println!("  {} Must be between 1 and 5", "⚠".yellow());
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+
+    Ok(changed)
 }
 
 /// Pick a message from multiple options, or return the single one directly.
@@ -408,7 +582,7 @@ mod tests {
     #[test]
     fn test_action_menu_options_are_complete() {
         // Verify all action constants are distinct
-        let options = [ACTION_COMMIT, ACTION_EDIT, ACTION_REGENERATE, ACTION_CANCEL, ACTION_COPY];
+        let options = [ACTION_COMMIT, ACTION_EDIT, ACTION_REGENERATE, ACTION_SETTINGS, ACTION_CANCEL, ACTION_COPY];
         let unique: std::collections::HashSet<_> = options.iter().collect();
         assert_eq!(unique.len(), options.len(), "Action labels must be unique");
     }
@@ -430,5 +604,70 @@ mod tests {
     fn test_combine_subject_body_empty_body_returns_subject_only() {
         let result = combine_subject_body("feat: add auth", "");
         assert_eq!(result, "feat: add auth");
+    }
+
+    #[test]
+    fn test_session_config_from_config_defaults() {
+        let config = Config {
+            locale: "pt-br".into(),
+            commit_type: CommitType::Conventional,
+            max_length: 72,
+            generate: 2,
+            ..Config::default()
+        };
+        let session = SessionConfig::from_config(&config, None, None).unwrap();
+        assert_eq!(session.locale, "pt-br");
+        assert_eq!(session.commit_type, CommitType::Conventional);
+        assert_eq!(session.max_length, 72);
+        assert_eq!(session.generate, 2);
+    }
+
+    #[test]
+    fn test_session_config_from_config_with_overrides() {
+        let config = Config {
+            locale: "en".into(),
+            commit_type: CommitType::Plain,
+            max_length: 72,
+            generate: 1,
+            ..Config::default()
+        };
+        let session = SessionConfig::from_config(&config, Some("subject+body"), Some(3)).unwrap();
+        assert_eq!(session.commit_type, CommitType::SubjectBody);
+        assert_eq!(session.generate, 3);
+        // Non-overridden fields stay the same
+        assert_eq!(session.locale, "en");
+        assert_eq!(session.max_length, 72);
+    }
+
+    #[test]
+    fn test_build_generation_params_plain() {
+        let session = SessionConfig {
+            locale: "en".into(),
+            commit_type: CommitType::Conventional,
+            max_length: 72,
+            generate: 1,
+        };
+        let params = build_generation_params(&session, "claude-sonnet", 30, None);
+        assert!(params.system.contains("en"));
+        assert!(params.desc_system.is_none());
+        assert_eq!(params.gen_opts.completions, 1);
+        assert_eq!(params.gen_opts.model, "claude-sonnet");
+        assert_eq!(params.gen_opts.timeout_secs, 30);
+    }
+
+    #[test]
+    fn test_build_generation_params_subject_body() {
+        let session = SessionConfig {
+            locale: "ja".into(),
+            commit_type: CommitType::SubjectBody,
+            max_length: 90,
+            generate: 2,
+        };
+        let params = build_generation_params(&session, "gemini-flash", 60, None);
+        assert!(params.system.contains("ja"));
+        assert!(params.desc_system.is_some());
+        assert!(params.desc_system.unwrap().contains("ja"));
+        assert_eq!(params.gen_opts.completions, 2);
+        assert_eq!(params.gen_opts.max_tokens, 2000);
     }
 }

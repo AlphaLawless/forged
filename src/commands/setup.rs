@@ -1,6 +1,6 @@
 use anyhow::Result;
 use colored::Colorize;
-use inquire::{Password, Select, Text};
+use inquire::{Password, PasswordDisplayMode, Select, Text};
 
 use crate::config::{CommitType, Config};
 
@@ -98,9 +98,9 @@ pub fn run(existing: Option<Config>) -> Result<Config> {
     } else {
         String::new()
     };
-    let api_key = Password::new(&format!("Enter your API key{key_hint}:"))
+    let api_key = Password::new(&format!("Enter your API key{key_hint} (stored in ~/.forged):"))
+        .with_display_mode(PasswordDisplayMode::Masked)
         .without_confirmation()
-        .with_help_message("Your key is stored locally in ~/.forged")
         .prompt()?;
     if !api_key.is_empty() {
         config.api_key = api_key;

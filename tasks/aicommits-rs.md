@@ -235,6 +235,21 @@ forged/
 
 ---
 
+### Fase 15 — Session Settings Buffer [DONE]
+- [x] `SessionConfig` struct — buffer efêmero com locale, commit_type, max_length, generate
+- [x] `build_generation_params()` — centraliza construção de system/desc_system/gen_opts
+- [x] `Action::Settings` no action menu
+- [x] `settings_menu()` — submenu interativo para editar campos com validação
+- [x] Regenerate usa `SessionConfig` atualizado (buffer refletido automaticamente)
+- [x] Settings + mudança → regenera automaticamente com novos valores
+- [x] `PasswordDisplayMode::Masked` no setup wizard (fix cursor)
+
+**Testes novos (4):**
+- `test_session_config_from_config_defaults`, `test_session_config_from_config_with_overrides`
+- `test_build_generation_params_plain`, `test_build_generation_params_subject_body`
+
+---
+
 ## Contagem de Testes Atual
 
 | Módulo | Testes |
@@ -248,11 +263,11 @@ forged/
 | ai/providers/gemini.rs | 6 |
 | ai/mod.rs | 5 |
 | commands/setup.rs | 8 |
-| commands/commit.rs | 4 |
+| commands/commit.rs | 8 |
 | commands/config.rs | 4 |
 | clipboard.rs | 2 |
 | main.rs (CLI) | 4 |
-| **Total unitários** | **88** |
+| **Total unitários** | **92** |
 
 ### Testes de Integração (`tests/`)
 
@@ -264,7 +279,7 @@ forged/
 | tests/provider_http.rs | 4 |
 | **Total integração** | **16** |
 
-| **Total geral** | **104 (todos passando)** |
+| **Total geral** | **108 (todos passando)** |
 
 ---
 
