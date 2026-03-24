@@ -4,10 +4,7 @@ use std::process::Command;
 
 pub const MAX_DIFF_LENGTH: usize = 30_000;
 
-const LOCK_FILE_PATTERNS: &[&str] = &[
-    "package-lock.json",
-    "pnpm-lock.yaml",
-];
+const LOCK_FILE_PATTERNS: &[&str] = &["package-lock.json", "pnpm-lock.yaml"];
 
 const LOCK_FILE_EXTENSION: &str = ".lock";
 
@@ -36,7 +33,9 @@ fn run_git(args: &[&str]) -> Result<String> {
         bail!("git {} failed: {}", args.join(" "), stderr.trim());
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim_end().to_string())
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string())
 }
 
 /// Run git with -C <dir> to target a specific repo path.
@@ -66,8 +65,16 @@ fn staged_diff_impl(dir: Option<&Path>, exclude_files: &[String]) -> Result<Opti
         }
     };
 
-    let mut name_args: Vec<&str> = vec!["diff", "--cached", "--diff-algorithm=minimal", "--name-only"];
-    let exclude_pathspecs: Vec<String> = exclude_files.iter().map(|f| format!(":(exclude){f}")).collect();
+    let mut name_args: Vec<&str> = vec![
+        "diff",
+        "--cached",
+        "--diff-algorithm=minimal",
+        "--name-only",
+    ];
+    let exclude_pathspecs: Vec<String> = exclude_files
+        .iter()
+        .map(|f| format!(":(exclude){f}"))
+        .collect();
     let exclude_refs: Vec<&str> = exclude_pathspecs.iter().map(|s| s.as_str()).collect();
     name_args.extend(&exclude_refs);
 
@@ -76,7 +83,11 @@ fn staged_diff_impl(dir: Option<&Path>, exclude_files: &[String]) -> Result<Opti
         return Ok(None);
     }
 
-    let all_files: Vec<String> = files_output.lines().filter(|l| !l.is_empty()).map(String::from).collect();
+    let all_files: Vec<String> = files_output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
     let has_non_lock = all_files.iter().any(|f| !is_lock_file(f));
 
     let mut lock_excludes: Vec<String> = Vec::new();
@@ -87,16 +98,29 @@ fn staged_diff_impl(dir: Option<&Path>, exclude_files: &[String]) -> Result<Opti
         lock_excludes.push(format!(":(exclude)*{LOCK_FILE_EXTENSION}"));
     }
 
-    let all_excludes: Vec<String> = lock_excludes.iter().chain(exclude_pathspecs.iter()).cloned().collect();
+    let all_excludes: Vec<String> = lock_excludes
+        .iter()
+        .chain(exclude_pathspecs.iter())
+        .cloned()
+        .collect();
     let all_exclude_refs: Vec<&str> = all_excludes.iter().map(|s| s.as_str()).collect();
 
-    let mut file_args: Vec<&str> = vec!["diff", "--cached", "--diff-algorithm=minimal", "--name-only"];
+    let mut file_args: Vec<&str> = vec![
+        "diff",
+        "--cached",
+        "--diff-algorithm=minimal",
+        "--name-only",
+    ];
     file_args.extend(&all_exclude_refs);
     let filtered_output = git(&file_args)?;
     if filtered_output.is_empty() {
         return Ok(None);
     }
-    let files: Vec<String> = filtered_output.lines().filter(|l| !l.is_empty()).map(String::from).collect();
+    let files: Vec<String> = filtered_output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
 
     let mut diff_args: Vec<&str> = vec!["diff", "--cached", "--diff-algorithm=minimal"];
     diff_args.extend(&all_exclude_refs);
@@ -110,7 +134,10 @@ pub fn truncate_diff(diff: &str) -> String {
     if diff.len() <= MAX_DIFF_LENGTH {
         diff.to_string()
     } else {
-        format!("{}\n\n[Diff truncated due to size]", &diff[..MAX_DIFF_LENGTH])
+        format!(
+            "{}\n\n[Diff truncated due to size]",
+            &diff[..MAX_DIFF_LENGTH]
+        )
     }
 }
 
@@ -242,9 +269,21 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path();
 
-        Command::new("git").args(["init"]).current_dir(path).output().unwrap();
-        Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(path).output().unwrap();
-        Command::new("git").args(["config", "user.name", "Test"]).current_dir(path).output().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(path)
+            .output()
+            .unwrap();
 
         dir
     }
@@ -287,7 +326,11 @@ mod tests {
         let path = dir.path();
 
         std::fs::write(path.join("test.txt"), "hello").unwrap();
-        Command::new("git").args(["add", "test.txt"]).current_dir(path).output().unwrap();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(path)
+            .output()
+            .unwrap();
 
         let result = staged_diff_impl(Some(path), &[]).unwrap();
         assert!(result.is_some());
@@ -303,15 +346,27 @@ mod tests {
 
         // Create initial commit
         std::fs::write(path.join("file.txt"), "initial").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(path).output().unwrap();
-        Command::new("git").args(["commit", "-m", "init"]).current_dir(path).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(path)
+            .output()
+            .unwrap();
 
         // Modify file without staging
         std::fs::write(path.join("file.txt"), "changed").unwrap();
 
         let changes = unstaged_changes_impl(Some(path)).unwrap();
         assert!(!changes.is_empty());
-        assert!(changes.iter().any(|f| f.path == "file.txt" && f.status == "modified"));
+        assert!(
+            changes
+                .iter()
+                .any(|f| f.path == "file.txt" && f.status == "modified")
+        );
     }
 
     #[test]
@@ -321,14 +376,26 @@ mod tests {
 
         // Create initial commit
         std::fs::write(path.join("existing.txt"), "hi").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(path).output().unwrap();
-        Command::new("git").args(["commit", "-m", "init"]).current_dir(path).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(path)
+            .output()
+            .unwrap();
 
         // Add untracked file
         std::fs::write(path.join("new_file.txt"), "new").unwrap();
 
         let changes = unstaged_changes_impl(Some(path)).unwrap();
-        assert!(changes.iter().any(|f| f.path == "new_file.txt" && f.status == "new file"));
+        assert!(
+            changes
+                .iter()
+                .any(|f| f.path == "new_file.txt" && f.status == "new file")
+        );
     }
 
     #[test]
@@ -338,8 +405,16 @@ mod tests {
 
         // Create initial commit with everything staged
         std::fs::write(path.join("file.txt"), "content").unwrap();
-        Command::new("git").args(["add", "."]).current_dir(path).output().unwrap();
-        Command::new("git").args(["commit", "-m", "init"]).current_dir(path).output().unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(path)
+            .output()
+            .unwrap();
 
         let changes = unstaged_changes_impl(Some(path)).unwrap();
         assert!(changes.is_empty());
@@ -352,7 +427,11 @@ mod tests {
 
         // Stage only a lock file
         std::fs::write(path.join("Cargo.lock"), "lock content").unwrap();
-        Command::new("git").args(["add", "Cargo.lock"]).current_dir(path).output().unwrap();
+        Command::new("git")
+            .args(["add", "Cargo.lock"])
+            .current_dir(path)
+            .output()
+            .unwrap();
 
         let result = staged_diff_impl(Some(path), &[]).unwrap();
         assert!(result.is_some());

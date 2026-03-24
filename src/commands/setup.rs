@@ -24,20 +24,22 @@ const PROVIDER_LIST: &[ProviderInfo] = &[
     ProviderInfo {
         key: "gemini",
         label: "Gemini (Google)",
-        models: &[
-            "gemini-2.5-flash",
-            "gemini-2.5-pro",
-            "gemini-2.0-flash",
-        ],
+        models: &["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
     },
     // Future: OpenRouter, ChatGPT
 ];
 
 const COMMIT_TYPES: &[(&str, &str)] = &[
-    ("conventional", "conventional  — feat: / fix: / refactor: ..."),
+    (
+        "conventional",
+        "conventional  — feat: / fix: / refactor: ...",
+    ),
     ("plain", "plain         — free-form message"),
     ("gitmoji", "gitmoji       — :emoji: message"),
-    ("subject+body", "subject+body  — title + detailed description"),
+    (
+        "subject+body",
+        "subject+body  — title + detailed description",
+    ),
 ];
 
 /// Return the list of available provider keys.
@@ -87,8 +89,8 @@ pub fn run(existing: Option<Config>) -> Result<Config> {
         .with_starting_cursor(starting_idx)
         .with_page_size(10)
         .prompt()?;
-    let provider_info = find_provider_by_label(selected_label)
-        .expect("selected label must match a provider");
+    let provider_info =
+        find_provider_by_label(selected_label).expect("selected label must match a provider");
     config.provider = provider_info.key.into();
 
     // 2. API Key
@@ -98,10 +100,12 @@ pub fn run(existing: Option<Config>) -> Result<Config> {
     } else {
         String::new()
     };
-    let api_key = Password::new(&format!("Enter your API key{key_hint} (stored in ~/.forged):"))
-        .with_display_mode(PasswordDisplayMode::Masked)
-        .without_confirmation()
-        .prompt()?;
+    let api_key = Password::new(&format!(
+        "Enter your API key{key_hint} (stored in ~/.forged):"
+    ))
+    .with_display_mode(PasswordDisplayMode::Masked)
+    .without_confirmation()
+    .prompt()?;
     if !api_key.is_empty() {
         config.api_key = api_key;
     }
@@ -109,10 +113,7 @@ pub fn run(existing: Option<Config>) -> Result<Config> {
     // 3. Model selection
     if !provider_info.models.is_empty() {
         let models: Vec<&str> = provider_info.models.to_vec();
-        let default_idx = models
-            .iter()
-            .position(|m| *m == config.model)
-            .unwrap_or(0);
+        let default_idx = models.iter().position(|m| *m == config.model).unwrap_or(0);
         let model = Select::new("Choose a model:", models)
             .with_starting_cursor(default_idx)
             .with_page_size(10)
@@ -196,7 +197,10 @@ mod tests {
 
     #[test]
     fn test_available_provider_labels_match_count() {
-        assert_eq!(available_providers().len(), available_provider_labels().len());
+        assert_eq!(
+            available_providers().len(),
+            available_provider_labels().len()
+        );
     }
 
     #[test]

@@ -57,9 +57,15 @@ const GITMOJI_TYPES: &str = r#"{
 fn commit_type_instruction(commit_type: &CommitType) -> &'static str {
     match commit_type {
         CommitType::Plain => "",
-        CommitType::Conventional => "Choose a type from the type-to-description JSON below that best describes the git diff. IMPORTANT: The type MUST be lowercase (e.g., \"feat\", not \"Feat\" or \"FEAT\"):",
-        CommitType::Gitmoji => "Choose an emoji from the emoji-to-description JSON below that best describes the git diff:",
-        CommitType::SubjectBody => "Output only the subject line; the body is generated separately.",
+        CommitType::Conventional => {
+            "Choose a type from the type-to-description JSON below that best describes the git diff. IMPORTANT: The type MUST be lowercase (e.g., \"feat\", not \"Feat\" or \"FEAT\"):"
+        }
+        CommitType::Gitmoji => {
+            "Choose an emoji from the emoji-to-description JSON below that best describes the git diff:"
+        }
+        CommitType::SubjectBody => {
+            "Output only the subject line; the body is generated separately."
+        }
     }
 }
 
@@ -74,9 +80,13 @@ fn commit_type_data(commit_type: &CommitType) -> &'static str {
 fn commit_type_format(commit_type: &CommitType) -> &'static str {
     match commit_type {
         CommitType::Plain => "The output response must be in format:\n<commit message>",
-        CommitType::Conventional => "The output response must be in format:\n<type>[optional (<scope>)]: <commit message>\nThe commit message subject must start with a lowercase letter",
+        CommitType::Conventional => {
+            "The output response must be in format:\n<type>[optional (<scope>)]: <commit message>\nThe commit message subject must start with a lowercase letter"
+        }
         CommitType::Gitmoji => "The output response must be in format:\n:emoji: <commit message>",
-        CommitType::SubjectBody => "The output response must be in format:\n<commit message subject>",
+        CommitType::SubjectBody => {
+            "The output response must be in format:\n<commit message subject>"
+        }
     }
 }
 
@@ -165,7 +175,12 @@ mod tests {
 
     #[test]
     fn test_custom_prompt_appended_to_base() {
-        let prompt = build_system_prompt("en", 72, &CommitType::Plain, Some("Always mention the ticket number"));
+        let prompt = build_system_prompt(
+            "en",
+            72,
+            &CommitType::Plain,
+            Some("Always mention the ticket number"),
+        );
         assert!(prompt.contains("Always mention the ticket number"));
         assert!(prompt.contains("concise git commit"));
     }

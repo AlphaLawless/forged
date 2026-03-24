@@ -11,7 +11,11 @@ use tempfile::TempDir;
 fn setup_git_repo() -> TempDir {
     let dir = TempDir::new().unwrap();
     let p = dir.path();
-    Command::new("git").args(["init"]).current_dir(p).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(p)
+        .output()
+        .unwrap();
     Command::new("git")
         .args(["config", "user.email", "test@test.com"])
         .current_dir(p)
@@ -38,7 +42,10 @@ fn hook_install_creates_executable() {
 
     let metadata = fs::metadata(&hook_path).unwrap();
     let mode = metadata.permissions().mode();
-    assert!(mode & 0o111 != 0, "Hook should be executable, mode: {mode:o}");
+    assert!(
+        mode & 0o111 != 0,
+        "Hook should be executable, mode: {mode:o}"
+    );
 
     let content = fs::read_to_string(&hook_path).unwrap();
     assert!(content.contains("forged:auto-generated"));
@@ -68,7 +75,11 @@ fn hook_install_refuses_existing_non_forged_hook() {
     // Create a manual hook
     let hooks_dir = dir.path().join(".git/hooks");
     fs::create_dir_all(&hooks_dir).unwrap();
-    fs::write(hooks_dir.join("prepare-commit-msg"), "#!/bin/sh\necho custom\n").unwrap();
+    fs::write(
+        hooks_dir.join("prepare-commit-msg"),
+        "#!/bin/sh\necho custom\n",
+    )
+    .unwrap();
 
     let result = hook::install(false);
     assert!(result.is_err());
@@ -85,7 +96,11 @@ fn hook_install_force_overwrites_non_forged_hook() {
     // Create a manual hook
     let hooks_dir = dir.path().join(".git/hooks");
     fs::create_dir_all(&hooks_dir).unwrap();
-    fs::write(hooks_dir.join("prepare-commit-msg"), "#!/bin/sh\necho custom\n").unwrap();
+    fs::write(
+        hooks_dir.join("prepare-commit-msg"),
+        "#!/bin/sh\necho custom\n",
+    )
+    .unwrap();
 
     // Force install should succeed
     hook::install(true).unwrap();
@@ -102,7 +117,11 @@ fn hook_uninstall_refuses_non_forged_hook() {
 
     let hooks_dir = dir.path().join(".git/hooks");
     fs::create_dir_all(&hooks_dir).unwrap();
-    fs::write(hooks_dir.join("prepare-commit-msg"), "#!/bin/sh\necho custom\n").unwrap();
+    fs::write(
+        hooks_dir.join("prepare-commit-msg"),
+        "#!/bin/sh\necho custom\n",
+    )
+    .unwrap();
 
     let result = hook::uninstall(false);
     assert!(result.is_err());

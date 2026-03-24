@@ -2,8 +2,8 @@ pub mod provider;
 pub mod providers;
 pub mod sanitize;
 
-use anyhow::{Result, bail};
 use crate::config::Config;
+use anyhow::{Result, bail};
 use provider::AiProvider;
 use providers::claude::ClaudeProvider;
 use providers::gemini::GeminiProvider;

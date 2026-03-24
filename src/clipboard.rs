@@ -52,7 +52,10 @@ mod tests {
     #[test]
     fn test_clipboard_commands_returns_non_empty() {
         let cmds = clipboard_commands();
-        assert!(!cmds.is_empty(), "Should have at least one clipboard command");
+        assert!(
+            !cmds.is_empty(),
+            "Should have at least one clipboard command"
+        );
     }
 
     #[test]

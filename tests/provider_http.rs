@@ -69,7 +69,11 @@ async fn claude_full_request_response_roundtrip() {
 
     let provider = ClaudeProvider::with_base_url("sk-full-test".into(), server.url());
     let result = provider
-        .complete("Generate a commit message", "diff --git a/file.rs", &claude_opts())
+        .complete(
+            "Generate a commit message",
+            "diff --git a/file.rs",
+            &claude_opts(),
+        )
         .await
         .unwrap();
 
@@ -125,7 +129,11 @@ async fn gemini_full_request_response_roundtrip() {
 
     let provider = GeminiProvider::with_base_url("gem-full-test".into(), server.url());
     let result = provider
-        .complete("Generate a commit message", "diff --git a/file.rs", &gemini_opts())
+        .complete(
+            "Generate a commit message",
+            "diff --git a/file.rs",
+            &gemini_opts(),
+        )
         .await
         .unwrap();
 

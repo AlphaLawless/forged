@@ -18,7 +18,9 @@ impl CommitType {
             "conventional" => Ok(Self::Conventional),
             "gitmoji" => Ok(Self::Gitmoji),
             "subject+body" | "subjectbody" | "subject_body" => Ok(Self::SubjectBody),
-            other => bail!("Invalid commit type: '{other}'. Valid: plain, conventional, gitmoji, subject+body"),
+            other => bail!(
+                "Invalid commit type: '{other}'. Valid: plain, conventional, gitmoji, subject+body"
+            ),
         }
     }
 
@@ -127,7 +129,9 @@ impl Config {
             config.commit_type = CommitType::from_str_loose(v)?;
         }
         if let Some(v) = map.get("max_length") {
-            let n: u32 = v.parse().context("Config 'max_length' must be an integer")?;
+            let n: u32 = v
+                .parse()
+                .context("Config 'max_length' must be an integer")?;
             if n < 20 {
                 bail!("Config 'max_length' must be at least 20");
             }
@@ -218,8 +222,8 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
     use std::io::Write;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_config_defaults_when_file_missing() {

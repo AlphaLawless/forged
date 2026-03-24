@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::config::Config;
+use anyhow::Result;
 
 pub fn run_set(key: &str, value: &str) -> Result<()> {
     let path = config_path()?;
@@ -60,7 +60,8 @@ pub fn run_list() -> Result<()> {
 }
 
 fn config_path() -> Result<std::path::PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
     Ok(home.join(".forged"))
 }
 

@@ -30,8 +30,12 @@ impl SequentialProvider {
 
 #[async_trait]
 impl AiProvider for SequentialProvider {
-    fn name(&self) -> &str { "seq" }
-    fn default_model(&self) -> &str { "seq-1" }
+    fn name(&self) -> &str {
+        "seq"
+    }
+    fn default_model(&self) -> &str {
+        "seq-1"
+    }
     async fn complete(&self, _system: &str, _user: &str, _opts: &GenerateOpts) -> Result<String> {
         let mut idx = self.call_index.lock().unwrap();
         let resp = self.responses[*idx % self.responses.len()].clone();
@@ -48,8 +52,12 @@ struct ConstProvider {
 
 #[async_trait]
 impl AiProvider for ConstProvider {
-    fn name(&self) -> &str { "const" }
-    fn default_model(&self) -> &str { "const-1" }
+    fn name(&self) -> &str {
+        "const"
+    }
+    fn default_model(&self) -> &str {
+        "const-1"
+    }
     async fn complete(&self, _system: &str, _user: &str, _opts: &GenerateOpts) -> Result<String> {
         Ok(self.response.clone())
     }
@@ -63,8 +71,12 @@ struct EmptyBodyProvider {
 
 #[async_trait]
 impl AiProvider for EmptyBodyProvider {
-    fn name(&self) -> &str { "empty" }
-    fn default_model(&self) -> &str { "empty-1" }
+    fn name(&self) -> &str {
+        "empty"
+    }
+    fn default_model(&self) -> &str {
+        "empty-1"
+    }
     async fn complete(&self, _system: &str, user: &str, _opts: &GenerateOpts) -> Result<String> {
         // If user prompt contains "Title:", it's a description call → return empty
         if user.contains("Title:") {
@@ -94,7 +106,9 @@ async fn pipeline_plain_returns_subjects_only() {
     let system = prompt::build_system_prompt("en", 72, &CommitType::Conventional, None);
     let provider = SequentialProvider::new(vec!["feat: add login", "fix: resolve crash"]);
 
-    let messages = generate_messages(&provider, &system, "some diff", &test_opts(2)).await.unwrap();
+    let messages = generate_messages(&provider, &system, "some diff", &test_opts(2))
+        .await
+        .unwrap();
 
     // Plain mode: no description generation, just subjects
     assert_eq!(messages.len(), 2);
@@ -113,7 +127,9 @@ async fn pipeline_subject_body_combines_both() {
         "feat: add main entry point",
         "- Initialize application with main function",
     ]);
-    let subjects = generate_messages(&provider, &system, diff, &test_opts(1)).await.unwrap();
+    let subjects = generate_messages(&provider, &system, diff, &test_opts(1))
+        .await
+        .unwrap();
     assert_eq!(subjects[0], "feat: add main entry point");
 
     // Body generation
@@ -142,7 +158,9 @@ async fn pipeline_dedup_subjects() {
         response: "feat: add login".to_string(),
     };
 
-    let messages = generate_messages(&provider, &system, "diff", &test_opts(3)).await.unwrap();
+    let messages = generate_messages(&provider, &system, "diff", &test_opts(3))
+        .await
+        .unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0], "feat: add login");
 }
@@ -157,7 +175,9 @@ async fn pipeline_empty_body_returns_subject_only() {
 
     // Generate subject
     let system = prompt::build_system_prompt("en", 72, &CommitType::SubjectBody, None);
-    let subjects = generate_messages(&provider, &system, "diff", &test_opts(1)).await.unwrap();
+    let subjects = generate_messages(&provider, &system, "diff", &test_opts(1))
+        .await
+        .unwrap();
     assert_eq!(subjects[0], "feat: add logging");
 
     // Generate body (empty)

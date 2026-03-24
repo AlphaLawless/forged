@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use forged::ai::provider::{AiProvider, GenerateOpts, generate_description, generate_messages};
 use forged::config::CommitType;
-use forged::git::{commit, staged_diff, CommitResult};
+use forged::git::{CommitResult, commit, staged_diff};
 use forged::prompt;
 use serial_test::serial;
 
@@ -67,7 +67,11 @@ fn setup_repo_with_staged_change() -> TempDir {
     let dir = TempDir::new().unwrap();
     let p = dir.path();
 
-    Command::new("git").args(["init"]).current_dir(p).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(p)
+        .output()
+        .unwrap();
     Command::new("git")
         .args(["config", "user.email", "test@test.com"])
         .current_dir(p)
@@ -80,7 +84,11 @@ fn setup_repo_with_staged_change() -> TempDir {
         .unwrap();
 
     fs::write(p.join("init.txt"), "init").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(p).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(p)
+        .output()
+        .unwrap();
     Command::new("git")
         .args(["commit", "-m", "initial"])
         .current_dir(p)
@@ -89,7 +97,11 @@ fn setup_repo_with_staged_change() -> TempDir {
 
     // Stage a real code change
     fs::write(p.join("app.rs"), "fn main() { println!(\"hello\"); }\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(p).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(p)
+        .output()
+        .unwrap();
 
     dir
 }
@@ -114,7 +126,9 @@ async fn full_flow_plain_commit() {
     std::env::set_current_dir(dir.path()).unwrap();
 
     // 1. Get staged diff (real git)
-    let staged = staged_diff(&[]).unwrap().expect("should have staged changes");
+    let staged = staged_diff(&[])
+        .unwrap()
+        .expect("should have staged changes");
     let diff = &staged.diff;
     assert!(!diff.is_empty());
 
@@ -123,7 +137,9 @@ async fn full_flow_plain_commit() {
 
     // 3. Generate message (mock AI)
     let provider = MockProvider::new(vec!["feat: add hello world app"]);
-    let messages = generate_messages(&provider, &system, diff, &test_opts()).await.unwrap();
+    let messages = generate_messages(&provider, &system, diff, &test_opts())
+        .await
+        .unwrap();
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0], "feat: add hello world app");
 
@@ -142,16 +158,20 @@ async fn full_flow_subject_body_commit() {
     let dir = setup_repo_with_staged_change();
     std::env::set_current_dir(dir.path()).unwrap();
 
-    let staged = staged_diff(&[]).unwrap().expect("should have staged changes");
+    let staged = staged_diff(&[])
+        .unwrap()
+        .expect("should have staged changes");
     let diff = &staged.diff;
 
     // Step 1: Generate subject
     let system = prompt::build_system_prompt("en", 72, &CommitType::SubjectBody, None);
     let provider = MockProvider::new(vec![
-        "feat: add hello world app",          // subject (call 1)
-        "- Add main function with println",   // body (call 2)
+        "feat: add hello world app",        // subject (call 1)
+        "- Add main function with println", // body (call 2)
     ]);
-    let subjects = generate_messages(&provider, &system, diff, &test_opts()).await.unwrap();
+    let subjects = generate_messages(&provider, &system, diff, &test_opts())
+        .await
+        .unwrap();
 
     // Step 2: Generate body
     let desc_system = prompt::build_description_prompt("en", 72, None);
@@ -182,13 +202,19 @@ async fn full_flow_sanitization_chain() {
     let dir = setup_repo_with_staged_change();
     std::env::set_current_dir(dir.path()).unwrap();
 
-    let staged = staged_diff(&[]).unwrap().expect("should have staged changes");
+    let staged = staged_diff(&[])
+        .unwrap()
+        .expect("should have staged changes");
     let diff = &staged.diff;
     let system = prompt::build_system_prompt("en", 72, &CommitType::Conventional, None);
 
     // Provider returns dirty output with think tags and trailing dot
-    let provider = MockProvider::new(vec!["<think>hmm let me think</think>feat: add main entry point."]);
-    let messages = generate_messages(&provider, &system, diff, &test_opts()).await.unwrap();
+    let provider = MockProvider::new(vec![
+        "<think>hmm let me think</think>feat: add main entry point.",
+    ]);
+    let messages = generate_messages(&provider, &system, diff, &test_opts())
+        .await
+        .unwrap();
 
     // Sanitization should have cleaned it
     assert_eq!(messages[0], "feat: add main entry point");

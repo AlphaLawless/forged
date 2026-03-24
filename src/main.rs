@@ -2,7 +2,11 @@ use clap::{Parser, Subcommand};
 use forged::{commands, config};
 
 #[derive(Parser)]
-#[command(name = "forged", about = "AI-powered git commit message generator", version)]
+#[command(
+    name = "forged",
+    about = "AI-powered git commit message generator",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -129,8 +133,8 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
     use super::Cli;
+    use clap::Parser;
 
     #[test]
     fn test_cli_parses_generate_flag() {

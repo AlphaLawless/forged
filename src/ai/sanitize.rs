@@ -3,8 +3,7 @@ use std::sync::LazyLock;
 
 static THINK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?is)<think>.*?</think>").unwrap());
-static LEADING_TAG_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^<[^>]*>\s*").unwrap());
+static LEADING_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^<[^>]*>\s*").unwrap());
 
 /// Sanitize a single-line commit title.
 /// Strips reasoning blocks, takes first line, removes trailing dot,
@@ -164,7 +163,10 @@ mod tests {
 
     #[test]
     fn test_sanitize_removes_leading_html_tag() {
-        assert_eq!(sanitize_title("<output> feat: add login"), "feat: add login");
+        assert_eq!(
+            sanitize_title("<output> feat: add login"),
+            "feat: add login"
+        );
     }
 
     #[test]
@@ -197,7 +199,11 @@ mod tests {
             assert!(part.len() <= 40, "line too long: {part}");
         }
         // Verify content is preserved (ignoring whitespace differences)
-        let rejoined: String = wrapped.lines().map(|l| l.trim()).collect::<Vec<_>>().join(" ");
+        let rejoined: String = wrapped
+            .lines()
+            .map(|l| l.trim())
+            .collect::<Vec<_>>()
+            .join(" ");
         assert_eq!(rejoined, line);
     }
 
@@ -209,7 +215,10 @@ mod tests {
         assert!(lines.len() > 1);
         // Continuation lines should start with "  "
         for continuation in &lines[1..] {
-            assert!(continuation.starts_with("  "), "expected indent: {continuation}");
+            assert!(
+                continuation.starts_with("  "),
+                "expected indent: {continuation}"
+            );
         }
     }
 

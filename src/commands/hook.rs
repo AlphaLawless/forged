@@ -72,11 +72,7 @@ pub fn install(force: bool) -> Result<()> {
     fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))
         .context("Failed to set hook permissions")?;
 
-    println!(
-        "{} Hook installed in .git/hooks/{}",
-        "✔".green(),
-        HOOK_NAME
-    );
+    println!("{} Hook installed in .git/hooks/{}", "✔".green(), HOOK_NAME);
     println!(
         "  {} Now {} will auto-generate commit messages.",
         "→".dimmed(),

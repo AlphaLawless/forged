@@ -23,12 +23,7 @@ pub trait AiProvider: Send + Sync + std::fmt::Debug {
     }
 
     /// Send a single completion request and return the raw response text.
-    async fn complete(
-        &self,
-        system: &str,
-        user: &str,
-        opts: &GenerateOpts,
-    ) -> Result<String>;
+    async fn complete(&self, system: &str, user: &str, opts: &GenerateOpts) -> Result<String>;
 }
 
 /// Generate a commit body (description) for a given subject line.
@@ -90,9 +85,18 @@ mod tests {
 
     #[async_trait]
     impl AiProvider for MockProvider {
-        fn name(&self) -> &str { "mock" }
-        fn default_model(&self) -> &str { "mock-1" }
-        async fn complete(&self, _system: &str, _user: &str, _opts: &GenerateOpts) -> Result<String> {
+        fn name(&self) -> &str {
+            "mock"
+        }
+        fn default_model(&self) -> &str {
+            "mock-1"
+        }
+        async fn complete(
+            &self,
+            _system: &str,
+            _user: &str,
+            _opts: &GenerateOpts,
+        ) -> Result<String> {
             // Return responses in rotation based on a simple counter
             // Since we can't easily use interior mutability here without Mutex,
             // just return the first response for simplicity
@@ -107,9 +111,18 @@ mod tests {
 
     #[async_trait]
     impl AiProvider for MultiMockProvider {
-        fn name(&self) -> &str { "multi-mock" }
-        fn default_model(&self) -> &str { "mock-1" }
-        async fn complete(&self, _system: &str, _user: &str, _opts: &GenerateOpts) -> Result<String> {
+        fn name(&self) -> &str {
+            "multi-mock"
+        }
+        fn default_model(&self) -> &str {
+            "mock-1"
+        }
+        async fn complete(
+            &self,
+            _system: &str,
+            _user: &str,
+            _opts: &GenerateOpts,
+        ) -> Result<String> {
             use std::sync::atomic::{AtomicUsize, Ordering};
             static COUNTER: AtomicUsize = AtomicUsize::new(0);
             let idx = COUNTER.fetch_add(1, Ordering::SeqCst) % self.responses.len();
@@ -132,7 +145,9 @@ mod tests {
         let provider = MockProvider {
             responses: vec!["feat: add login".into()],
         };
-        let result = generate_messages(&provider, "sys", "diff", &test_opts(3)).await.unwrap();
+        let result = generate_messages(&provider, "sys", "diff", &test_opts(3))
+            .await
+            .unwrap();
         // All 3 completions return the same thing, should deduplicate to 1
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], "feat: add login");
@@ -143,7 +158,9 @@ mod tests {
         let provider = MultiMockProvider {
             responses: vec!["feat: add login".into(), "feat: add auth".into()],
         };
-        let result = generate_messages(&provider, "sys", "diff", &test_opts(2)).await.unwrap();
+        let result = generate_messages(&provider, "sys", "diff", &test_opts(2))
+            .await
+            .unwrap();
         assert_eq!(result.len(), 2);
     }
 
@@ -152,16 +169,28 @@ mod tests {
         let provider = MockProvider {
             responses: vec!["<think>hmm</think>feat: add login.".into()],
         };
-        let result = generate_messages(&provider, "sys", "diff", &test_opts(1)).await.unwrap();
+        let result = generate_messages(&provider, "sys", "diff", &test_opts(1))
+            .await
+            .unwrap();
         assert_eq!(result[0], "feat: add login");
     }
 
     #[tokio::test]
     async fn test_generate_description_returns_sanitized_body() {
         let provider = MockProvider {
-            responses: vec!["<think>ok</think>- Add OAuth2 provider\n- Implement token refresh".into()],
+            responses: vec![
+                "<think>ok</think>- Add OAuth2 provider\n- Implement token refresh".into(),
+            ],
         };
-        let result = generate_description(&provider, "sys", "feat: add auth", "diff content", &test_opts(1)).await.unwrap();
+        let result = generate_description(
+            &provider,
+            "sys",
+            "feat: add auth",
+            "diff content",
+            &test_opts(1),
+        )
+        .await
+        .unwrap();
         assert!(result.contains("Add OAuth2 provider"));
         assert!(result.contains("Implement token refresh"));
         assert!(!result.contains("<think>"));
@@ -174,9 +203,18 @@ mod tests {
 
     #[async_trait]
     impl AiProvider for CapturingProvider {
-        fn name(&self) -> &str { "capture" }
-        fn default_model(&self) -> &str { "capture-1" }
-        async fn complete(&self, _system: &str, user: &str, _opts: &GenerateOpts) -> Result<String> {
+        fn name(&self) -> &str {
+            "capture"
+        }
+        fn default_model(&self) -> &str {
+            "capture-1"
+        }
+        async fn complete(
+            &self,
+            _system: &str,
+            user: &str,
+            _opts: &GenerateOpts,
+        ) -> Result<String> {
             self.captured_user.lock().unwrap().push(user.to_string());
             Ok("- Some change".to_string())
         }
@@ -187,7 +225,15 @@ mod tests {
         let provider = CapturingProvider {
             captured_user: std::sync::Mutex::new(Vec::new()),
         };
-        generate_description(&provider, "sys", "feat: add login", "diff here", &test_opts(1)).await.unwrap();
+        generate_description(
+            &provider,
+            "sys",
+            "feat: add login",
+            "diff here",
+            &test_opts(1),
+        )
+        .await
+        .unwrap();
         let captured = provider.captured_user.lock().unwrap();
         assert_eq!(captured.len(), 1);
         assert!(captured[0].contains("Title: feat: add login"));

@@ -3,8 +3,8 @@ use colored::Colorize;
 
 use crate::ai;
 use crate::ai::provider::{GenerateOpts, generate_description, generate_messages};
-use crate::config::CommitType;
 use crate::clipboard;
+use crate::config::CommitType;
 use crate::config::Config;
 use crate::git;
 use crate::prompt;
@@ -35,7 +35,9 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
         if atty::is(atty::Stream::Stdin) {
             config = super::setup::run(Some(config))?;
         } else {
-            bail!("No configuration found. Run `forged` in an interactive terminal to set up, or manually configure with `forged config set`.");
+            bail!(
+                "No configuration found. Run `forged` in an interactive terminal to set up, or manually configure with `forged config set`."
+            );
         }
     }
 
@@ -52,7 +54,9 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
         Some(s) => s,
         None => {
             if headless {
-                bail!("No staged changes found. Stage your changes manually, or use the --all flag.");
+                bail!(
+                    "No staged changes found. Stage your changes manually, or use the --all flag."
+                );
             }
             if !offer_stage_changes()? {
                 return Ok(());
@@ -73,11 +77,8 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
 
     let provider = ai::build_provider(&config)?;
 
-    let mut session = SessionConfig::from_config(
-        &config,
-        opts.commit_type.as_deref(),
-        opts.generate,
-    )?;
+    let mut session =
+        SessionConfig::from_config(&config, opts.commit_type.as_deref(), opts.generate)?;
 
     let model = if config.model.is_empty() {
         provider.default_model().to_string()
@@ -230,7 +231,11 @@ struct SessionConfig {
 }
 
 impl SessionConfig {
-    fn from_config(config: &Config, commit_type_override: Option<&str>, generate_override: Option<u8>) -> Result<Self> {
+    fn from_config(
+        config: &Config,
+        commit_type_override: Option<&str>,
+        generate_override: Option<u8>,
+    ) -> Result<Self> {
         let commit_type = if let Some(t) = commit_type_override {
             CommitType::from_str_loose(t)?
         } else {
@@ -282,7 +287,11 @@ fn build_generation_params(
         timeout_secs: timeout,
     };
 
-    GenerationParams { system, desc_system, gen_opts }
+    GenerationParams {
+        system,
+        desc_system,
+        gen_opts,
+    }
 }
 
 // --- Subject+Body helpers ---
@@ -350,7 +359,12 @@ fn action_menu(message: &str, clipboard_mode: bool) -> Result<Action> {
     } else {
         options.push(ACTION_COMMIT);
     }
-    options.extend([ACTION_EDIT, ACTION_REGENERATE, ACTION_SETTINGS, ACTION_CANCEL]);
+    options.extend([
+        ACTION_EDIT,
+        ACTION_REGENERATE,
+        ACTION_SETTINGS,
+        ACTION_CANCEL,
+    ]);
 
     let choice = inquire::Select::new("What do you want to do?", options)
         .with_page_size(10)
@@ -369,10 +383,16 @@ fn action_menu(message: &str, clipboard_mode: bool) -> Result<Action> {
 // --- Settings menu ---
 
 const COMMIT_TYPE_OPTIONS: &[(&str, &str)] = &[
-    ("conventional", "conventional  — feat: / fix: / refactor: ..."),
+    (
+        "conventional",
+        "conventional  — feat: / fix: / refactor: ...",
+    ),
     ("plain", "plain         — free-form message"),
     ("gitmoji", "gitmoji       — :emoji: message"),
-    ("subject+body", "subject+body  — title + detailed description"),
+    (
+        "subject+body",
+        "subject+body  — title + detailed description",
+    ),
 ];
 
 const SETTING_LOCALE: &str = "locale";
@@ -395,7 +415,13 @@ fn settings_menu(session: &mut SessionConfig) -> Result<bool> {
         println!("    generate   = {}", session.generate);
         println!();
 
-        let options = vec![SETTING_LOCALE, SETTING_TYPE, SETTING_MAX_LENGTH, SETTING_GENERATE, SETTING_BACK];
+        let options = vec![
+            SETTING_LOCALE,
+            SETTING_TYPE,
+            SETTING_MAX_LENGTH,
+            SETTING_GENERATE,
+            SETTING_BACK,
+        ];
         let choice = inquire::Select::new("Change setting:", options)
             .with_page_size(10)
             .prompt()?;
@@ -496,7 +522,10 @@ fn do_commit(message: &str, no_verify: bool, extra_args: &[String]) -> Result<()
             Ok(())
         }
         git::CommitResult::HookFailed => {
-            println!("{} Commit failed — pre-commit hook rejected the commit.", "✘".red());
+            println!(
+                "{} Commit failed — pre-commit hook rejected the commit.",
+                "✘".red()
+            );
             println!(
                 "  {} Use {} to bypass hooks.",
                 "tip:".dimmed(),
@@ -562,7 +591,11 @@ fn offer_stage_changes() -> Result<bool> {
         .filter_map(|label| {
             // Find the matching change by label
             labels.iter().zip(changes.iter()).find_map(|(l, c)| {
-                if l == label { Some(c.path.clone()) } else { None }
+                if l == label {
+                    Some(c.path.clone())
+                } else {
+                    None
+                }
             })
         })
         .collect();
@@ -590,7 +623,14 @@ mod tests {
     #[test]
     fn test_action_menu_options_are_complete() {
         // Verify all action constants are distinct
-        let options = [ACTION_COMMIT, ACTION_EDIT, ACTION_REGENERATE, ACTION_SETTINGS, ACTION_CANCEL, ACTION_COPY];
+        let options = [
+            ACTION_COMMIT,
+            ACTION_EDIT,
+            ACTION_REGENERATE,
+            ACTION_SETTINGS,
+            ACTION_CANCEL,
+            ACTION_COPY,
+        ];
         let unique: std::collections::HashSet<_> = options.iter().collect();
         assert_eq!(unique.len(), options.len(), "Action labels must be unique");
     }
@@ -605,7 +645,10 @@ mod tests {
     #[test]
     fn test_combine_subject_body_joins_with_blank_line() {
         let result = combine_subject_body("feat: add auth", "- Add OAuth2\n- Add token refresh");
-        assert_eq!(result, "feat: add auth\n\n- Add OAuth2\n- Add token refresh");
+        assert_eq!(
+            result,
+            "feat: add auth\n\n- Add OAuth2\n- Add token refresh"
+        );
     }
 
     #[test]

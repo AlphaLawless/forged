@@ -89,12 +89,7 @@ impl AiProvider for GeminiProvider {
         60 // Gemini thinking models need more time
     }
 
-    async fn complete(
-        &self,
-        system: &str,
-        user: &str,
-        opts: &GenerateOpts,
-    ) -> Result<String> {
+    async fn complete(&self, system: &str, user: &str, opts: &GenerateOpts) -> Result<String> {
         let url = format!("{}/chat/completions", self.base_url);
 
         let body = RequestBody {
@@ -129,7 +124,9 @@ impl AiProvider for GeminiProvider {
                         opts.timeout_secs
                     )
                 } else if e.is_connect() {
-                    anyhow::anyhow!("Failed to connect to Gemini API. Are you connected to the internet?")
+                    anyhow::anyhow!(
+                        "Failed to connect to Gemini API. Are you connected to the internet?"
+                    )
                 } else {
                     anyhow::anyhow!("HTTP request failed: {e}")
                 }
@@ -248,17 +245,27 @@ mod tests {
             .await;
 
         let provider = GeminiProvider::with_base_url("key".into(), server.url());
-        let _ = provider.complete("my system prompt", "my diff", &test_opts()).await;
+        let _ = provider
+            .complete("my system prompt", "my diff", &test_opts())
+            .await;
         mock.assert_async().await;
     }
 
     #[tokio::test]
     async fn test_gemini_parses_choices_response() {
         let mut server = Server::new_async().await;
-        let _mock = setup_mock(&mut server, 200, &success_response("feat: add authentication")).await;
+        let _mock = setup_mock(
+            &mut server,
+            200,
+            &success_response("feat: add authentication"),
+        )
+        .await;
 
         let provider = GeminiProvider::with_base_url("key".into(), server.url());
-        let result = provider.complete("sys", "diff", &test_opts()).await.unwrap();
+        let result = provider
+            .complete("sys", "diff", &test_opts())
+            .await
+            .unwrap();
         assert_eq!(result, "feat: add authentication");
     }
 
@@ -273,7 +280,10 @@ mod tests {
         .await;
 
         let provider = GeminiProvider::with_base_url("bad-key".into(), server.url());
-        let err = provider.complete("sys", "diff", &test_opts()).await.unwrap_err();
+        let err = provider
+            .complete("sys", "diff", &test_opts())
+            .await
+            .unwrap_err();
         assert!(err.to_string().to_lowercase().contains("invalid api key"));
     }
 
@@ -288,7 +298,10 @@ mod tests {
         .await;
 
         let provider = GeminiProvider::with_base_url("key".into(), server.url());
-        let err = provider.complete("sys", "diff", &test_opts()).await.unwrap_err();
+        let err = provider
+            .complete("sys", "diff", &test_opts())
+            .await
+            .unwrap_err();
         assert!(err.to_string().to_lowercase().contains("rate limit"));
     }
 
@@ -298,7 +311,10 @@ mod tests {
         let _mock = setup_mock(&mut server, 200, r#"{"choices": []}"#).await;
 
         let provider = GeminiProvider::with_base_url("key".into(), server.url());
-        let err = provider.complete("sys", "diff", &test_opts()).await.unwrap_err();
+        let err = provider
+            .complete("sys", "diff", &test_opts())
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("no text"));
     }
 }

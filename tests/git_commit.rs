@@ -2,7 +2,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
-use forged::git::{commit, CommitResult};
+use forged::git::{CommitResult, commit};
 use serial_test::serial;
 use tempfile::TempDir;
 
@@ -12,7 +12,11 @@ fn setup_repo_with_staged_change() -> TempDir {
     let p = dir.path();
 
     // Init repo with initial commit
-    Command::new("git").args(["init"]).current_dir(p).output().unwrap();
+    Command::new("git")
+        .args(["init"])
+        .current_dir(p)
+        .output()
+        .unwrap();
     Command::new("git")
         .args(["config", "user.email", "test@test.com"])
         .current_dir(p)
@@ -25,7 +29,11 @@ fn setup_repo_with_staged_change() -> TempDir {
         .unwrap();
 
     fs::write(p.join("init.txt"), "init").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(p).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(p)
+        .output()
+        .unwrap();
     Command::new("git")
         .args(["commit", "-m", "initial"])
         .current_dir(p)
@@ -34,7 +42,11 @@ fn setup_repo_with_staged_change() -> TempDir {
 
     // Stage a new change
     fs::write(p.join("change.txt"), "hello").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(p).output().unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(p)
+        .output()
+        .unwrap();
 
     dir
 }
