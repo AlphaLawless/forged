@@ -309,15 +309,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(".forged");
 
-        let mut config = Config::default();
-        config.provider = "claude".into();
-        config.api_key = "sk-test".into();
-        config.model = "claude-sonnet-4-6".into();
-        config.locale = "pt-br".into();
-        config.commit_type = CommitType::Gitmoji;
-        config.max_length = 50;
-        config.generate = 3;
-        config.timeout = 20;
+        let config = Config {
+            provider: "claude".into(),
+            api_key: "sk-test".into(),
+            model: "claude-sonnet-4-6".into(),
+            locale: "pt-br".into(),
+            commit_type: CommitType::Gitmoji,
+            max_length: 50,
+            generate: 3,
+            timeout: 20,
+        };
         config.save_to(&path).unwrap();
 
         let loaded = Config::load_from(&path).unwrap();
