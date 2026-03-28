@@ -203,10 +203,14 @@ forged config list
 - [x] One-liner install script
 - [x] ChatGPT (OpenAI) and OpenRouter providers
 - [x] Per-repo local config (`forged setup local`)
+- [x] Error classification for failover (retryable vs fatal errors)
+
+### In Progress
+
+- [ ] Multi-provider with failover (configure multiple providers, auto-fallback on rate limit/timeout)
 
 ### Planned
 
-- [ ] Multi-provider with failover (configure multiple providers, auto-fallback on rate limit/timeout)
 - [ ] Local LLM support (Ollama, llama.cpp, LM Studio — works offline, no API key needed)
 - [ ] Large diff chunking (50+ files)
 

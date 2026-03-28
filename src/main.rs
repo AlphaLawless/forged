@@ -60,6 +60,8 @@ enum Commands {
         #[command(subcommand)]
         scope: Option<SetupScope>,
     },
+    /// Upgrade forged to the latest version
+    Upgrade,
     /// Manage git hook integration
     Hook {
         #[command(subcommand)]
@@ -116,6 +118,7 @@ async fn main() {
             }
             Some(SetupScope::Local) => commands::setup::run_local().map(|_| ()),
         },
+        Some(Commands::Upgrade) => commands::upgrade::run().await,
         Some(Commands::Hook { action }) => match action {
             HookAction::Install { force } => commands::hook::install(force),
             HookAction::Uninstall { force } => commands::hook::uninstall(force),

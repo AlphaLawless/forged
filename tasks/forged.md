@@ -348,6 +348,47 @@ forged/
 
 ---
 
+### Fase 19 — Multi-Provider com Failover [IN PROGRESS]
+
+#### 19a — AiError Enum + Trait Update [DONE]
+- [x] `AiError` enum: `Retryable` (429, timeout, 5xx), `ProviderFatal` (401/403), `Fatal` (parse error)
+- [x] `AiProvider::complete()` retorna `Result<String, AiError>` em vez de `anyhow::Result`
+- [x] `AiError::should_failover()` helper
+- [x] `impl Display + Error` para `AiError`
+
+#### 19b — Providers Atualizados [DONE]
+- [x] `claude.rs`: classifica erros na origem (timeout→Retryable, 401→ProviderFatal, parse→Fatal)
+- [x] `openai_compat.rs`: mesma classificação (cobre gemini, chatgpt, openrouter)
+- [x] Todos os 24+ testes de providers passando sem mudança de assertions
+
+#### 19c — generate_messages/description com AiError [DONE]
+- [x] `generate_messages()` retorna `Result<Vec<String>, AiError>`
+- [x] `generate_description()` retorna `Result<String, AiError>`
+- [x] `Fatal` propaga imediato, `Retryable`/`ProviderFatal` preserva último erro
+- [x] Mocks em unit tests e integration tests atualizados
+
+#### 19d — Config Multi-Provider [TODO]
+- [ ] `ProviderEntry` struct (name, api_key, model)
+- [ ] `Config.providers: Vec<ProviderEntry>`
+- [ ] Parsing: `providers=claude,gemini` + `api_key_claude=...` + `model_claude=...`
+- [ ] Backwards compat: `provider=claude` single-field continua funcionando
+- [ ] `save_to()`/`save_diff_to()` com formato novo/legado
+
+#### 19e — build_providers() + Failover Logic [TODO]
+- [ ] `ProviderWithOpts` struct (provider, model, timeout)
+- [ ] `build_providers(config)` → `Vec<ProviderWithOpts>`
+- [ ] `generate_messages_with_failover()` — tenta providers em ordem
+- [ ] `generate_description_with_failover()`
+- [ ] `FailoverReport` (used_provider, used_model, tried)
+
+#### 19f — Commit Flow + UI [TODO]
+- [ ] `commit.rs` usa `build_providers()` + failover functions
+- [ ] Log: `:: Generated with claude-sonnet-4-6 (fallback: gemini failed — rate limit)`
+- [ ] Setup wizard: adicionar fallback provider opcional
+- [ ] `config list/set` com provider-specific keys
+
+---
+
 ## Contagem de Testes Atual
 
 | Módulo | Testes |
@@ -388,14 +429,14 @@ forged/
 
 ## Pendências
 
-### Próximas
+### Em progresso
 
-#### Multi-provider com failover
-- [ ] Suporte a múltiplos providers configurados simultaneamente (lista ordenada por prioridade)
-- [ ] Failover automático: se provider primário falha (429 rate limit, timeout, 5xx), tenta o próximo
-- [ ] Config: `providers=claude,gemini` (lista separada por vírgula, cada um com sua api_key)
-- [ ] Retry inteligente: distinguir erros retryáveis (429, timeout) de fatais (401 invalid key)
-- [ ] Log de qual provider foi usado: `:: Generated with claude-sonnet-4-6 (fallback: gemini-2.5-flash)`
+#### Multi-provider com failover (Fase 19d-f)
+- [ ] Config multi-provider (`providers=claude,gemini`, `api_key_<name>=...`)
+- [ ] `build_providers()` + failover logic
+- [ ] Commit flow + UI (log, setup wizard, config commands)
+
+### Futuro
 
 #### LLMs locais
 - [ ] Provider `local` via endpoint OpenAI-compatible (Ollama, llama.cpp, LM Studio, vLLM)
