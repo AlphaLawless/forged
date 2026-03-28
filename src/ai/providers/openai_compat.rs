@@ -162,23 +162,33 @@ impl AiProvider for OpenAiCompatProvider {
 
         let status = response.status();
 
-        if self.config.invalid_key_statuses.contains(&status.as_u16()) {
-            bail!(
-                "Invalid API key. Check your {} API key and try again.",
-                provider_name
-            );
-        }
-
-        if status == 429 {
-            bail!("Rate limit exceeded. Please wait a moment and try again.");
-        }
-
         if !status.is_success() {
             let body_text = response.text().await.unwrap_or_default();
-            if let Ok(api_err) = serde_json::from_str::<ApiError>(&body_text)
-                && let Some(detail) = api_err.error
-                && let Some(msg) = detail.message
-            {
+            let api_msg = serde_json::from_str::<ApiError>(&body_text)
+                .ok()
+                .and_then(|e| e.error)
+                .and_then(|d| d.message);
+
+            if self.config.invalid_key_statuses.contains(&status.as_u16()) {
+                if let Some(msg) = api_msg {
+                    bail!(
+                        "Invalid API key for {} ({}): {}",
+                        provider_name,
+                        status.as_u16(),
+                        msg
+                    );
+                }
+                bail!(
+                    "Invalid API key. Check your {} API key and try again.",
+                    provider_name
+                );
+            }
+
+            if status == 429 {
+                bail!("Rate limit exceeded. Please wait a moment and try again.");
+            }
+
+            if let Some(msg) = api_msg {
                 bail!("{} API error ({}): {}", provider_name, status.as_u16(), msg);
             }
             bail!(
