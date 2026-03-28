@@ -3,7 +3,7 @@
 
 use forged::ai::provider::{AiProvider, GenerateOpts};
 use forged::ai::providers::claude::ClaudeProvider;
-use forged::ai::providers::gemini::GeminiProvider;
+use forged::ai::providers::gemini;
 use mockito::Server;
 
 fn claude_opts() -> GenerateOpts {
@@ -127,7 +127,7 @@ async fn gemini_full_request_response_roundtrip() {
         .create_async()
         .await;
 
-    let provider = GeminiProvider::with_base_url("gem-full-test".into(), server.url());
+    let provider = gemini::with_base_url("gem-full-test".into(), server.url());
     let result = provider
         .complete(
             "Generate a commit message",
@@ -187,7 +187,7 @@ async fn gemini_timeout_enforced() {
     let mut opts = gemini_opts();
     opts.timeout_secs = 1;
 
-    let provider = GeminiProvider::with_base_url("key".into(), base_url);
+    let provider = gemini::with_base_url("key".into(), base_url);
     let result = provider.complete("sys", "diff", &opts).await;
 
     assert!(result.is_err());

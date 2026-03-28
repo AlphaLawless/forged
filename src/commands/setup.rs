@@ -26,7 +26,20 @@ const PROVIDER_LIST: &[ProviderInfo] = &[
         label: "Gemini (Google)",
         models: &["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
     },
-    // Future: OpenRouter, ChatGPT
+    ProviderInfo {
+        key: "chatgpt",
+        label: "ChatGPT (OpenAI)",
+        models: &["gpt-4o", "gpt-4o-mini", "o3-mini"],
+    },
+    ProviderInfo {
+        key: "openrouter",
+        label: "OpenRouter",
+        models: &[
+            "anthropic/claude-sonnet-4-6",
+            "google/gemini-2.5-flash",
+            "openai/gpt-4o",
+        ],
+    },
 ];
 
 const COMMIT_TYPES: &[(&str, &str)] = &[
@@ -189,10 +202,12 @@ mod tests {
     }
 
     #[test]
-    fn test_available_providers_contains_claude_and_gemini() {
+    fn test_available_providers_contains_all() {
         let providers = available_providers();
         assert!(providers.contains(&"claude"));
         assert!(providers.contains(&"gemini"));
+        assert!(providers.contains(&"chatgpt"));
+        assert!(providers.contains(&"openrouter"));
     }
 
     #[test]
@@ -220,6 +235,22 @@ mod tests {
     }
 
     #[test]
+    fn test_find_provider_chatgpt() {
+        let p = find_provider("chatgpt").unwrap();
+        assert_eq!(p.key, "chatgpt");
+        assert!(!p.models.is_empty());
+        assert!(p.models.contains(&"gpt-4o"));
+    }
+
+    #[test]
+    fn test_find_provider_openrouter() {
+        let p = find_provider("openrouter").unwrap();
+        assert_eq!(p.key, "openrouter");
+        assert!(!p.models.is_empty());
+        assert!(p.models.contains(&"anthropic/claude-sonnet-4-6"));
+    }
+
+    #[test]
     fn test_find_provider_unknown_returns_none() {
         assert!(find_provider("nonexistent").is_none());
     }
@@ -230,5 +261,9 @@ mod tests {
         assert_eq!(p.key, "claude");
         let p = find_provider_by_label("Gemini (Google)").unwrap();
         assert_eq!(p.key, "gemini");
+        let p = find_provider_by_label("ChatGPT (OpenAI)").unwrap();
+        assert_eq!(p.key, "chatgpt");
+        let p = find_provider_by_label("OpenRouter").unwrap();
+        assert_eq!(p.key, "openrouter");
     }
 }

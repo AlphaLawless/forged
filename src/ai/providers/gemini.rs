@@ -1,177 +1,31 @@
-use anyhow::{Context, Result, bail};
-use async_trait::async_trait;
-use reqwest::Client;
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use super::openai_compat::{OpenAiCompatConfig, OpenAiCompatProvider};
 
-use crate::ai::provider::{AiProvider, GenerateOpts};
-
-/// Gemini uses the OpenAI-compatible endpoint for simplicity.
 const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/openai";
-const DEFAULT_MODEL: &str = "gemini-2.5-flash";
 
-#[derive(Serialize)]
-struct Message {
-    role: String,
-    content: String,
-}
-
-#[derive(Serialize)]
-struct RequestBody {
-    model: String,
-    messages: Vec<Message>,
-    temperature: f32,
-    max_tokens: u32,
-}
-
-#[derive(Deserialize)]
-struct Choice {
-    message: ChoiceMessage,
-}
-
-#[derive(Deserialize)]
-struct ChoiceMessage {
-    content: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ApiResponse {
-    choices: Vec<Choice>,
-}
-
-#[derive(Deserialize)]
-struct ApiError {
-    error: Option<ApiErrorDetail>,
-}
-
-#[derive(Deserialize)]
-struct ApiErrorDetail {
-    message: Option<String>,
-}
-
-#[derive(Debug)]
-pub struct GeminiProvider {
-    api_key: String,
-    base_url: String,
-    client: Client,
-}
-
-impl GeminiProvider {
-    pub fn new(api_key: String) -> Self {
-        Self {
-            api_key,
-            base_url: DEFAULT_BASE_URL.into(),
-            client: Client::new(),
-        }
-    }
-
-    /// Create with a custom base URL (used for testing with mockito).
-    pub fn with_base_url(api_key: String, base_url: String) -> Self {
-        Self {
-            api_key,
-            base_url,
-            client: Client::new(),
-        }
+fn gemini_config() -> OpenAiCompatConfig {
+    OpenAiCompatConfig {
+        name: "gemini",
+        default_model: "gemini-2.5-flash",
+        default_timeout: 60,
+        base_url: DEFAULT_BASE_URL.into(),
+        extra_headers: vec![],
+        invalid_key_statuses: &[401, 403],
     }
 }
 
-#[async_trait]
-impl AiProvider for GeminiProvider {
-    fn name(&self) -> &str {
-        "gemini"
-    }
+pub fn new(api_key: String) -> OpenAiCompatProvider {
+    OpenAiCompatProvider::new(api_key, gemini_config())
+}
 
-    fn default_model(&self) -> &str {
-        DEFAULT_MODEL
-    }
-
-    fn default_timeout(&self) -> u64 {
-        60 // Gemini thinking models need more time
-    }
-
-    async fn complete(&self, system: &str, user: &str, opts: &GenerateOpts) -> Result<String> {
-        let url = format!("{}/chat/completions", self.base_url);
-
-        let body = RequestBody {
-            model: opts.model.clone(),
-            messages: vec![
-                Message {
-                    role: "system".into(),
-                    content: system.to_string(),
-                },
-                Message {
-                    role: "user".into(),
-                    content: user.to_string(),
-                },
-            ],
-            temperature: opts.temperature,
-            max_tokens: opts.max_tokens,
-        };
-
-        let response = self
-            .client
-            .post(&url)
-            .header("authorization", format!("Bearer {}", self.api_key))
-            .header("content-type", "application/json")
-            .json(&body)
-            .timeout(Duration::from_secs(opts.timeout_secs))
-            .send()
-            .await
-            .map_err(|e| {
-                if e.is_timeout() {
-                    anyhow::anyhow!(
-                        "Request timed out after {} seconds. The API took too long to respond.",
-                        opts.timeout_secs
-                    )
-                } else if e.is_connect() {
-                    anyhow::anyhow!(
-                        "Failed to connect to Gemini API. Are you connected to the internet?"
-                    )
-                } else {
-                    anyhow::anyhow!("HTTP request failed: {e}")
-                }
-            })?;
-
-        let status = response.status();
-
-        if status == 401 || status == 403 {
-            bail!("Invalid API key. Check your Gemini API key and try again.");
-        }
-
-        if status == 429 {
-            bail!("Rate limit exceeded. Please wait a moment and try again.");
-        }
-
-        if !status.is_success() {
-            let body_text = response.text().await.unwrap_or_default();
-            if let Ok(api_err) = serde_json::from_str::<ApiError>(&body_text)
-                && let Some(detail) = api_err.error
-                && let Some(msg) = detail.message
-            {
-                bail!("Gemini API error ({}): {}", status.as_u16(), msg);
-            }
-            bail!("Gemini API error ({}): {}", status.as_u16(), body_text);
-        }
-
-        let api_response: ApiResponse = response
-            .json()
-            .await
-            .context("Failed to parse Gemini API response")?;
-
-        let text = api_response
-            .choices
-            .into_iter()
-            .next()
-            .and_then(|c| c.message.content)
-            .context("Gemini API response contained no text")?;
-
-        Ok(text)
-    }
+/// Create with a custom base URL (used for testing with mockito).
+pub fn with_base_url(api_key: String, base_url: String) -> OpenAiCompatProvider {
+    OpenAiCompatProvider::with_base_url(api_key, base_url, gemini_config())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ai::provider::{AiProvider, GenerateOpts};
     use mockito::{Mock, Server};
 
     fn test_opts() -> GenerateOpts {
@@ -220,7 +74,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::with_base_url("test-gemini-key".into(), server.url());
+        let provider = with_base_url("test-gemini-key".into(), server.url());
         let _ = provider.complete("system", "user msg", &test_opts()).await;
         mock.assert_async().await;
     }
@@ -244,7 +98,7 @@ mod tests {
             .create_async()
             .await;
 
-        let provider = GeminiProvider::with_base_url("key".into(), server.url());
+        let provider = with_base_url("key".into(), server.url());
         let _ = provider
             .complete("my system prompt", "my diff", &test_opts())
             .await;
@@ -261,7 +115,7 @@ mod tests {
         )
         .await;
 
-        let provider = GeminiProvider::with_base_url("key".into(), server.url());
+        let provider = with_base_url("key".into(), server.url());
         let result = provider
             .complete("sys", "diff", &test_opts())
             .await
@@ -279,7 +133,7 @@ mod tests {
         )
         .await;
 
-        let provider = GeminiProvider::with_base_url("bad-key".into(), server.url());
+        let provider = with_base_url("bad-key".into(), server.url());
         let err = provider
             .complete("sys", "diff", &test_opts())
             .await
@@ -297,7 +151,7 @@ mod tests {
         )
         .await;
 
-        let provider = GeminiProvider::with_base_url("key".into(), server.url());
+        let provider = with_base_url("key".into(), server.url());
         let err = provider
             .complete("sys", "diff", &test_opts())
             .await
@@ -310,7 +164,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let _mock = setup_mock(&mut server, 200, r#"{"choices": []}"#).await;
 
-        let provider = GeminiProvider::with_base_url("key".into(), server.url());
+        let provider = with_base_url("key".into(), server.url());
         let err = provider
             .complete("sys", "diff", &test_opts())
             .await
