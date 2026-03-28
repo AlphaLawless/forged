@@ -189,24 +189,29 @@ tempfile = "3"
 forged/
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs               # CLI (clap derive)
-│   ├── config.rs              # ~/.forged INI read/write/validate
-│   ├── git.rs                 # staged diff, unstaged changes, stage, commit
+│   ├── main.rs               # CLI (clap derive) + SetupScope::Local
+│   ├── lib.rs                 # re-exports públicos
+│   ├── config.rs              # ~/.forged/{global,locals/*} INI read/write/validate/merge
+│   ├── git.rs                 # staged diff, unstaged changes, stage, commit, try_repo_root
 │   ├── prompt.rs              # system prompt builder
 │   ├── clipboard.rs           # copy to clipboard cross-platform
 │   ├── ai/
-│   │   ├── mod.rs             # build_provider() registry
+│   │   ├── mod.rs             # build_provider() registry (4 providers)
 │   │   ├── provider.rs        # trait AiProvider, generate_messages()
 │   │   ├── sanitize.rs        # sanitize, deduplicate, wrap
 │   │   └── providers/
 │   │       ├── mod.rs
-│   │       ├── claude.rs      # Anthropic API nativa
-│   │       └── gemini.rs      # Google OpenAI-compat endpoint
+│   │       ├── openai_compat.rs  # base compartilhada OpenAI-compatible
+│   │       ├── claude.rs         # Anthropic API nativa
+│   │       ├── gemini.rs         # Google (via openai_compat)
+│   │       ├── chatgpt.rs        # OpenAI (via openai_compat)
+│   │       └── openrouter.rs     # OpenRouter (via openai_compat)
 │   └── commands/
 │       ├── mod.rs
 │       ├── commit.rs          # fluxo principal + action menu + file picker
-│       ├── config.rs          # get/set/list
-│       └── setup.rs           # wizard interativo
+│       ├── config.rs          # get/set/list (merged config)
+│       ├── setup.rs           # wizard global + run_local() per-repo
+│       └── hook.rs            # install/uninstall prepare-commit-msg
 └── tests/
 ```
 
@@ -263,25 +268,108 @@ forged/
 
 ---
 
+### Fase 17 — Novos Providers: ChatGPT + OpenRouter [DONE]
+
+#### 17a — OpenAI-Compatible Base [DONE]
+- [x] `src/ai/providers/openai_compat.rs` — struct genérica `OpenAiCompatProvider` parametrizada por `OpenAiCompatConfig`
+- [x] Structs serde compartilhadas (Message, RequestBody, Choice, ApiResponse, ApiError)
+- [x] Error handling parametrizado: `invalid_key_statuses`, `extra_headers`, provider name em mensagens
+- [x] Construtores: `new(api_key, config)` e `with_base_url(api_key, base_url, config)` para testing
+
+#### 17b — Gemini Refactor [DONE]
+- [x] `gemini.rs` reduzido de ~170 linhas para ~25 linhas de factory functions
+- [x] 6 testes existentes preservados como regressão
+
+#### 17c — Provider ChatGPT (OpenAI) [DONE]
+- [x] `src/ai/providers/chatgpt.rs` — `api.openai.com/v1`, default model `gpt-4o`, timeout 30s
+- [x] Modelos: gpt-4o, gpt-4o-mini, o3-mini
+
+#### 17d — Provider OpenRouter [DONE]
+- [x] `src/ai/providers/openrouter.rs` — `openrouter.ai/api/v1`, default model `anthropic/claude-sonnet-4-6`, timeout 60s
+- [x] Header `http-referer` para app attribution
+- [x] Modelos: anthropic/claude-sonnet-4-6, google/gemini-2.5-flash, openai/gpt-4o
+
+#### 17e — Registry + Setup Wizard [DONE]
+- [x] `build_provider()` com 4 match arms (claude, gemini, chatgpt, openrouter)
+- [x] `PROVIDER_LIST` atualizado com 4 providers no wizard
+
+#### 17f — Improved Error Handling [DONE]
+- [x] 401/403 agora lê response body e mostra mensagem real da API (ex: "User not found")
+- [x] Fallback para mensagem genérica se body vazio
+
+**Testes novos (24):**
+- openai_compat.rs: 7 (parse, 429, api_error, empty_choices, custom_statuses, 401, extra_headers)
+- chatgpt.rs: 6 (name, model, timeout, bearer_auth, 401, parse_response)
+- openrouter.rs: 5 (name, model, timeout, referer_header, parse_response)
+- ai/mod.rs: +4 (build_chatgpt, build_openrouter, no_key variants)
+- setup.rs: +2 (find_chatgpt, find_openrouter)
+
+---
+
+### Fase 18 — Config Local (Per-Repo) [DONE]
+
+#### 18a — Directory Structure + Migration [DONE]
+- [x] `~/.forged/` diretório substitui `~/.forged` arquivo
+- [x] `~/.forged/global` — config global
+- [x] `~/.forged/locals/<profile>` — overrides por repo
+- [x] Migração silenciosa: arquivo antigo → `~/.forged/global` automaticamente
+- [x] `ensure_config_dir()` / `ensure_config_dir_at()` com migration logic
+
+#### 18b — Override Parcial + Merge [DONE]
+- [x] `apply_map()` extraído de `load_from()` — reuso interno zero duplicação
+- [x] `apply_overrides_from(path)` — lê INI, aplica só campos presentes
+- [x] `save_diff_to(path, base)` — salva só campos que diferem do global
+- [x] `Config::load()` — resolução completa: global → detect repo → merge local
+- [x] `Config::load_global()` — só global (para setup/config set)
+- [x] `Config::load_with_source()` — retorna config + profile name ativo
+
+#### 18c — Git Helpers [DONE]
+- [x] `try_repo_root()` — detecção não-falível do repo root
+- [x] `repo_name()` — extrai nome do diretório do path
+
+#### 18d — Comando `forged setup local` [DONE]
+- [x] `forged setup local` — wizard interativo para config por repo
+- [x] Detecta repo via `assert_git_repo()`, usa nome do diretório como profile
+- [x] Wizard: provider, api_key (opcional, herda global), model, commit_type, locale
+- [x] Salva overrides em `~/.forged/locals/<profile>`
+- [x] Cria `.forged` na root do repo com nome do profile
+- [x] Sugere adicionar `.forged` ao `.gitignore`
+
+#### 18e — Call Sites Atualizados [DONE]
+- [x] `commands/config.rs`: `run_set` usa `load_global()`/`save_global()`, `run_get`/`run_list` usam `load()` (merged)
+- [x] `config list` mostra `# profile: <name>` quando local ativo
+- [x] `commands/setup.rs`: `run()` salva em `~/.forged/global`
+- [x] `main.rs`: `Setup { scope: Option<SetupScope> }` com `SetupScope::Local`
+
+**Testes novos (13):**
+- config.rs: 9 (apply_map_partial, validation, overrides_empty, overrides_nonexistent, save_diff, save_diff_empty, migration_file, migration_dir, load_merge)
+- git.rs: 3 (try_repo_root, repo_name, repo_name_root)
+- setup.rs: 1 (atualizado labels_match_count)
+
+---
+
 ## Contagem de Testes Atual
 
 | Módulo | Testes |
 |---|---|
-| config.rs | 8 |
-| git.rs | 9 |
+| config.rs | 17 |
+| git.rs | 12 |
 | prompt.rs | 9 |
 | ai/sanitize.rs | 17 |
 | ai/provider.rs | 5 |
+| ai/providers/openai_compat.rs | 7 |
 | ai/providers/claude.rs | 6 |
 | ai/providers/gemini.rs | 6 |
-| ai/mod.rs | 5 |
-| commands/setup.rs | 8 |
+| ai/providers/chatgpt.rs | 6 |
+| ai/providers/openrouter.rs | 5 |
+| ai/mod.rs | 9 |
+| commands/setup.rs | 10 |
 | commands/commit.rs | 8 |
 | commands/hook.rs | 6 |
 | commands/config.rs | 4 |
 | clipboard.rs | 2 |
 | main.rs (CLI) | 4 |
-| **Total unitários** | **98** |
+| **Total unitários** | **131** |
 
 ### Testes de Integração (`tests/`)
 
@@ -294,29 +382,13 @@ forged/
 | tests/git_hook.rs | 6 |
 | **Total integração** | **22** |
 
-| **Total geral** | **120 (todos passando)** |
+| **Total geral** | **157 (todos passando)** |
 
 ---
 
 ## Pendências
 
-### Concluídas nesta sessão
-- [x] subject+body generation em 2 passos (subject → description com context)
-- [x] Testes de integração em `tests/` (16 testes: git_commit, full_flow, generate_pipeline, provider_http)
-- [x] Session settings buffer (menu "Settings" no action menu para alterar locale/type/max_length/generate temporariamente)
-- [x] Fix cursor do Password no setup wizard (PasswordDisplayMode::Masked)
-- [x] `src/lib.rs` criado para expor módulos publicamente
-
 ### Próximas
-- [x] Git hook integration (`forged hook install/uninstall`, prepare-commit-msg)
-- [x] CI pipeline (`cargo test` + `cargo clippy` + `cargo fmt --check`)
-
-### Concluídas (distribuição)
-- [x] GitHub Releases workflow (5 targets: linux x86/arm, mac x86/arm, windows)
-- [x] Install script one-liner (`install.sh`)
-- [x] README atualizado com todas as opções de instalação
-
-### Futuro
 
 #### Multi-provider com failover
 - [ ] Suporte a múltiplos providers configurados simultaneamente (lista ordenada por prioridade)
@@ -333,7 +405,6 @@ forged/
 - [ ] Zero API key necessária — funciona offline
 
 #### Outros
-- [ ] Providers OpenRouter, ChatGPT (OpenAI)
 - [ ] Large diff chunking (>50 files → chunks de 10 → combine)
 
 ---

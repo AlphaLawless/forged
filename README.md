@@ -2,11 +2,11 @@
 
 AI-powered git commit message generator. Written in Rust.
 
-Analyzes your staged changes and generates meaningful commit messages using Claude or Gemini. Supports conventional commits, gitmoji, subject+body format, and more.
+Analyzes your staged changes and generates meaningful commit messages using Claude, Gemini, ChatGPT, or OpenRouter. Supports conventional commits, gitmoji, subject+body format, and more.
 
 ## Install
 
-You need an API key from [Anthropic](https://console.anthropic.com/) or [Google AI Studio](https://aistudio.google.com/apikey).
+You need an API key from [Anthropic](https://console.anthropic.com/), [Google AI Studio](https://aistudio.google.com/apikey), [OpenAI](https://platform.openai.com/api-keys), or [OpenRouter](https://openrouter.ai/settings/keys).
 
 ### One-liner (Linux/macOS)
 
@@ -137,6 +137,8 @@ feat: add OAuth2 login flow
 |----------|--------|
 | Claude (Anthropic) | claude-sonnet-4-6, claude-haiku-4-5, claude-opus-4-6 |
 | Gemini (Google) | gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash |
+| ChatGPT (OpenAI) | gpt-4o, gpt-4o-mini, o3-mini |
+| OpenRouter | anthropic/claude-sonnet-4-6, google/gemini-2.5-flash, openai/gpt-4o |
 
 ## Commit formats
 
@@ -149,7 +151,7 @@ feat: add OAuth2 login flow
 
 ## Config file
 
-Stored at `~/.forged`:
+Global config stored at `~/.forged/global`:
 
 ```ini
 provider=gemini
@@ -162,7 +164,25 @@ generate=1
 timeout=0
 ```
 
-`timeout=0` uses the provider's default (30s for Claude, 60s for Gemini).
+`timeout=0` uses the provider's default (30s for Claude/ChatGPT, 60s for Gemini/OpenRouter).
+
+### Per-repo config
+
+Set up a local configuration profile for the current repository:
+
+```sh
+forged setup local
+```
+
+This creates a `.forged` file in the repo root and saves overrides to `~/.forged/locals/<repo-name>`. Only the fields you change are stored locally — everything else inherits from the global config.
+
+```sh
+# View the resolved (merged) config
+forged config list
+# profile: my-project
+# provider=openrouter
+# ...
+```
 
 ## Roadmap
 
@@ -181,12 +201,13 @@ timeout=0
 - [x] CI pipeline (check, fmt, clippy, test)
 - [x] GitHub Releases with cross-platform binaries
 - [x] One-liner install script
+- [x] ChatGPT (OpenAI) and OpenRouter providers
+- [x] Per-repo local config (`forged setup local`)
 
 ### Planned
 
 - [ ] Multi-provider with failover (configure multiple providers, auto-fallback on rate limit/timeout)
 - [ ] Local LLM support (Ollama, llama.cpp, LM Studio — works offline, no API key needed)
-- [ ] OpenRouter and ChatGPT providers
 - [ ] Large diff chunking (50+ files)
 
 ## License
