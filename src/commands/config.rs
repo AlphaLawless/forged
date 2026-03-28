@@ -1,5 +1,7 @@
-use crate::config::Config;
+use crate::config::{self, Config, ConfigSource, ConfigWithSources};
 use anyhow::Result;
+use colored::Colorize;
+use inquire::Select;
 
 pub fn run_set(key: &str, value: &str) -> Result<()> {
     let mut config = Config::load_global()?;
@@ -17,7 +19,6 @@ pub fn run_get(key: &str) -> Result<()> {
             if config.api_key.is_empty() {
                 "(not set)".into()
             } else {
-                // Mask the key for security
                 let visible = &config.api_key[..config.api_key.len().min(8)];
                 format!("{visible}...")
             }
@@ -34,29 +35,117 @@ pub fn run_get(key: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn run_list() -> Result<()> {
-    let (config, profile) = Config::load_with_source()?;
+fn mask_api_key(key: &str) -> String {
+    if key.is_empty() {
+        "(not set)".into()
+    } else {
+        let visible = &key[..key.len().min(8)];
+        format!("{visible}...")
+    }
+}
 
-    if let Some(ref name) = profile {
-        println!("# profile: {name}");
+fn source_tag(source: &ConfigSource) -> &'static str {
+    match source {
+        ConfigSource::Default => "default",
+        ConfigSource::Global => "global",
+        ConfigSource::Local => "local",
+    }
+}
+
+fn print_config_table(sources: &ConfigWithSources) {
+    let config = &sources.config;
+    let fs = &sources.field_sources;
+    let default_source = ConfigSource::Default;
+    let get = |key: &str| -> &ConfigSource { fs.get(key).unwrap_or(&default_source) };
+
+    let fields: &[(&str, String)] = &[
+        ("provider", config.provider.clone()),
+        ("api_key", mask_api_key(&config.api_key)),
+        ("model", config.model.clone()),
+        ("locale", config.locale.clone()),
+        ("type", config.commit_type.as_str().to_string()),
+        ("max_length", config.max_length.to_string()),
+        ("generate", config.generate.to_string()),
+        ("timeout", config.timeout.to_string()),
+    ];
+
+    for (key, value) in fields {
+        let source = get(key);
+        let tag = format!("[{}]", source_tag(source));
+        let line = format!("  {:<12} = {:<30} {}", key, value, tag.dimmed());
+        match source {
+            ConfigSource::Local => println!("{}", line.green()),
+            _ => println!("{line}"),
+        }
+    }
+}
+
+const GLOBAL_PREFIX: &str = "Global";
+
+fn clear_screen() {
+    print!("\x1b[2J\x1b[H");
+}
+
+fn wait_for_enter() {
+    use std::io::{self, Read};
+    println!();
+    println!("  {}", "Press Enter to go back...".dimmed());
+    let _ = io::stdin().read(&mut [0u8]);
+}
+
+pub fn run_list() -> Result<()> {
+    let global_path = config::global_config_path()?;
+    let profiles = config::list_profiles()?;
+
+    loop {
+        clear_screen();
+
+        // Build options: Global + all local profiles
+        let mut options = vec![format!(
+            "{} ({})",
+            GLOBAL_PREFIX,
+            global_path.display()
+        )];
+        for name in &profiles {
+            if let Ok(lp) = config::local_config_path(name) {
+                options.push(format!("{name} ({lp})", lp = lp.display()));
+            }
+        }
+
+        let selected = Select::new("Select a config to view:", options)
+            .with_page_size(10)
+            .prompt_skippable()?;
+
+        let Some(choice) = selected else {
+            break;
+        };
+
+        clear_screen();
+
+        if choice.starts_with(GLOBAL_PREFIX) {
+            let sources = Config::load_with_sources_at(&global_path, None, None)?;
+            println!("  {}", "Global config".bold());
+            println!("  {}", global_path.display().to_string().dimmed());
+            println!();
+            print_config_table(&sources);
+        } else {
+            let profile = choice.split(" (").next().unwrap_or(&choice);
+            let local_path = config::local_config_path(profile)?;
+            let sources =
+                Config::load_with_sources_at(&global_path, Some(&local_path), Some(profile))?;
+            println!(
+                "  {} {}",
+                "Profile:".bold(),
+                profile.green().bold()
+            );
+            println!("  {}", local_path.display().to_string().dimmed());
+            println!();
+            print_config_table(&sources);
+        }
+
+        wait_for_enter();
     }
 
-    println!("provider={}", config.provider);
-    println!(
-        "api_key={}",
-        if config.api_key.is_empty() {
-            "(not set)".into()
-        } else {
-            let visible = &config.api_key[..config.api_key.len().min(8)];
-            format!("{visible}...")
-        }
-    );
-    println!("model={}", config.model);
-    println!("locale={}", config.locale);
-    println!("type={}", config.commit_type.as_str());
-    println!("max_length={}", config.max_length);
-    println!("generate={}", config.generate);
-    println!("timeout={}", config.timeout);
     Ok(())
 }
 

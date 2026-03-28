@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use inquire::{Password, PasswordDisplayMode, Select, Text};
 use std::path::PathBuf;
 
-use crate::config::{CommitType, Config};
+use crate::config::{self, CommitType, Config};
 
 #[derive(Debug, Clone)]
 pub struct ProviderInfo {
@@ -277,6 +277,123 @@ pub fn run_local() -> Result<Config> {
     );
 
     Ok(config)
+}
+
+/// Remove the local config for the current repo.
+pub fn remove_local() -> Result<()> {
+    let repo_root = crate::git::assert_git_repo()?;
+    let dot_forged = PathBuf::from(&repo_root).join(".forged");
+
+    if !dot_forged.is_file() {
+        println!("{}", "No local config for this repo.".dimmed());
+        return Ok(());
+    }
+
+    let profile = std::fs::read_to_string(&dot_forged)
+        .context("Failed to read .forged profile file")?
+        .trim()
+        .to_string();
+
+    if profile.is_empty() {
+        // Just remove the empty pointer file
+        std::fs::remove_file(&dot_forged).ok();
+        println!("{}", "No local config for this repo.".dimmed());
+        return Ok(());
+    }
+
+    // Remove the profile file from ~/.forged/locals/
+    let removed = config::remove_local_profile(&profile)?;
+
+    // Remove the .forged pointer file
+    std::fs::remove_file(&dot_forged).context("Failed to remove .forged file")?;
+
+    println!();
+    if removed {
+        println!(
+            "{} Removed local profile '{profile}' and .forged pointer",
+            "✔".green()
+        );
+    } else {
+        println!(
+            "{} Removed .forged pointer (profile '{profile}' was already absent)",
+            "✔".green()
+        );
+    }
+    println!();
+
+    Ok(())
+}
+
+/// List all available local profiles.
+pub fn list_profiles() -> Result<()> {
+    let profiles = config::list_profiles()?;
+
+    if profiles.is_empty() {
+        println!("{}", "No local profiles found.".dimmed());
+        return Ok(());
+    }
+
+    let locals_dir = config::locals_dir()?;
+    println!();
+    println!("{}", "  Available profiles ".bold());
+    for name in &profiles {
+        let path = locals_dir.join(name);
+        println!("  {} {}", name.green(), path.display().to_string().dimmed());
+    }
+    println!();
+
+    Ok(())
+}
+
+/// Use an existing profile for the current repo.
+pub fn use_profile(name: Option<&str>) -> Result<()> {
+    let repo_root = crate::git::assert_git_repo()?;
+    let profiles = config::list_profiles()?;
+
+    if profiles.is_empty() {
+        bail!("No local profiles available. Run `forged setup local` first.");
+    }
+
+    let selected = match name {
+        Some(n) => {
+            if !config::profile_exists(n)? {
+                println!();
+                println!(
+                    "{} Profile '{}' not found. Available profiles:",
+                    "✗".red(),
+                    n
+                );
+                for p in &profiles {
+                    println!("  - {}", p.green());
+                }
+                println!();
+                bail!("Profile '{n}' does not exist");
+            }
+            n.to_string()
+        }
+        None => {
+            Select::new("Choose a profile to use:", profiles)
+                .with_page_size(10)
+                .prompt()?
+        }
+    };
+
+    // Write .forged pointer in repo root
+    let dot_forged = PathBuf::from(&repo_root).join(".forged");
+    std::fs::write(&dot_forged, format!("{selected}\n"))
+        .context("Failed to write .forged profile file")?;
+
+    println!();
+    println!(
+        "{} Now using profile '{selected}' for this repo",
+        "✔".green()
+    );
+    println!(
+        "{}",
+        "  Consider adding .forged to your .gitignore\n".dimmed()
+    );
+
+    Ok(())
 }
 
 #[cfg(test)]

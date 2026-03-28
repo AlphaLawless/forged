@@ -91,10 +91,12 @@ forged -n
 ```sh
 forged config set <key> <value>
 forged config get <key>
-forged config list
+forged config list                # interactive browser for all configs
 ```
 
 Available keys: `provider`, `api_key`, `model`, `locale`, `type`, `max_length`, `generate`, `timeout`
+
+`config list` opens an interactive menu where you can browse Global and all local profiles, showing the merged config with source tags (`[global]`, `[local]`, `[default]`).
 
 ### Git hook
 
@@ -177,11 +179,20 @@ forged setup local
 This creates a `.forged` file in the repo root and saves overrides to `~/.forged/locals/<repo-name>`. Only the fields you change are stored locally — everything else inherits from the global config.
 
 ```sh
+# List available profiles
+forged setup local --list
+
+# Reuse an existing profile in another repo
+forged setup local --use my-project
+
+# Interactive profile picker
+forged setup local --use
+
+# Remove local config from current repo
+forged setup local --remove
+
 # View the resolved (merged) config
 forged config list
-# profile: my-project
-# provider=openrouter
-# ...
 ```
 
 ## Roadmap
@@ -203,6 +214,7 @@ forged config list
 - [x] One-liner install script
 - [x] ChatGPT (OpenAI) and OpenRouter providers
 - [x] Per-repo local config (`forged setup local`)
+- [x] Config management UX (interactive config browser, profile reuse, remove local config)
 - [x] Error classification for failover (retryable vs fatal errors)
 
 ### In Progress

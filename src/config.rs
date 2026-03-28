@@ -62,23 +62,23 @@ impl Default for Config {
 }
 
 /// Base config directory: ~/.forged/
-fn config_dir() -> Result<PathBuf> {
+pub(crate) fn config_dir() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not determine home directory")?;
     Ok(home.join(".forged"))
 }
 
 /// Global config file: ~/.forged/global
-fn global_config_path() -> Result<PathBuf> {
+pub(crate) fn global_config_path() -> Result<PathBuf> {
     Ok(config_dir()?.join("global"))
 }
 
 /// Locals directory: ~/.forged/locals/
-fn locals_dir() -> Result<PathBuf> {
+pub(crate) fn locals_dir() -> Result<PathBuf> {
     Ok(config_dir()?.join("locals"))
 }
 
 /// Local config file for a profile: ~/.forged/locals/<profile>
-fn local_config_path(profile: &str) -> Result<PathBuf> {
+pub(crate) fn local_config_path(profile: &str) -> Result<PathBuf> {
     Ok(locals_dir()?.join(profile))
 }
 
@@ -146,6 +146,100 @@ fn serialize_ini(map: &HashMap<String, String>) -> String {
         .join("\n")
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConfigSource {
+    Default,
+    Global,
+    Local,
+}
+
+#[derive(Debug)]
+pub struct ConfigWithSources {
+    pub config: Config,
+    pub profile: Option<String>,
+    pub global_path: PathBuf,
+    pub local_path: Option<PathBuf>,
+    pub field_sources: HashMap<String, ConfigSource>,
+}
+
+const ALL_FIELD_KEYS: &[&str] = &[
+    "provider",
+    "api_key",
+    "model",
+    "locale",
+    "type",
+    "max_length",
+    "generate",
+    "timeout",
+];
+
+/// List all available local profile names from ~/.forged/locals/.
+pub fn list_profiles() -> Result<Vec<String>> {
+    ensure_config_dir()?;
+    let dir = locals_dir()?;
+    let mut names = Vec::new();
+    if dir.is_dir() {
+        for entry in fs::read_dir(&dir).context("Failed to read locals directory")? {
+            let entry = entry?;
+            if entry.file_type()?.is_file()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                names.push(name.to_string());
+            }
+        }
+        names.sort();
+    }
+    Ok(names)
+}
+
+/// List profiles under a custom base directory (for testing).
+pub fn list_profiles_at(base: &Path) -> Result<Vec<String>> {
+    let dir = base.join("locals");
+    let mut names = Vec::new();
+    if dir.is_dir() {
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                names.push(name.to_string());
+            }
+        }
+        names.sort();
+    }
+    Ok(names)
+}
+
+/// Remove a local profile file. Returns true if the file existed.
+pub fn remove_local_profile(profile: &str) -> Result<bool> {
+    ensure_config_dir()?;
+    let path = local_config_path(profile)?;
+    if path.exists() {
+        fs::remove_file(&path)
+            .with_context(|| format!("Failed to remove profile: {}", path.display()))?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Remove a local profile file under a custom base (for testing).
+pub fn remove_local_profile_at(base: &Path, profile: &str) -> Result<bool> {
+    let path = base.join("locals").join(profile);
+    if path.exists() {
+        fs::remove_file(&path)?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+/// Check if a profile exists in ~/.forged/locals/.
+pub fn profile_exists(profile: &str) -> Result<bool> {
+    ensure_config_dir()?;
+    Ok(local_config_path(profile)?.exists())
+}
+
 impl Config {
     /// Load config with full resolution: global + optional local overlay.
     pub fn load() -> Result<Self> {
@@ -185,6 +279,119 @@ impl Config {
         }
 
         Ok((config, profile_name))
+    }
+
+    /// Load config with per-field source tracking.
+    pub fn load_with_sources() -> Result<ConfigWithSources> {
+        ensure_config_dir()?;
+
+        let gpath = global_config_path()?;
+        let config_result = Self::load_from(&gpath)?;
+
+        // Parse global INI to find which keys are explicitly set
+        let global_keys: Vec<String> = if gpath.exists() {
+            let content = fs::read_to_string(&gpath)?;
+            parse_ini(&content).keys().cloned().collect()
+        } else {
+            Vec::new()
+        };
+
+        let mut field_sources: HashMap<String, ConfigSource> = HashMap::new();
+        for key in ALL_FIELD_KEYS {
+            let k = key.to_string();
+            if global_keys.contains(&k) {
+                field_sources.insert(k, ConfigSource::Global);
+            } else {
+                field_sources.insert(k, ConfigSource::Default);
+            }
+        }
+
+        let mut config = config_result;
+        let mut profile_name = None;
+        let mut lpath = None;
+
+        if let Some(repo_root) = crate::git::try_repo_root() {
+            let dot_forged = Path::new(&repo_root).join(".forged");
+            if dot_forged.is_file()
+                && let Ok(content) = fs::read_to_string(&dot_forged)
+            {
+                let profile = content.trim().to_string();
+                if !profile.is_empty() {
+                    let local_path = local_config_path(&profile)?;
+                    if local_path.exists() {
+                        // Parse local INI to find which keys are overridden
+                        let local_content = fs::read_to_string(&local_path)?;
+                        let local_keys = parse_ini(&local_content);
+                        for key in local_keys.keys() {
+                            field_sources.insert(key.clone(), ConfigSource::Local);
+                        }
+
+                        config.apply_overrides_from(&local_path)?;
+                        lpath = Some(local_path);
+                        profile_name = Some(profile);
+                    }
+                }
+            }
+        }
+
+        Ok(ConfigWithSources {
+            config,
+            profile: profile_name,
+            global_path: gpath,
+            local_path: lpath,
+            field_sources,
+        })
+    }
+
+    /// Load config with per-field sources from custom paths (for testing).
+    pub fn load_with_sources_at(
+        global_path: &Path,
+        local_path: Option<&Path>,
+        profile: Option<&str>,
+    ) -> Result<ConfigWithSources> {
+        let config_result = Self::load_from(&global_path.to_path_buf())?;
+
+        let global_keys: Vec<String> = if global_path.exists() {
+            let content = fs::read_to_string(global_path)?;
+            parse_ini(&content).keys().cloned().collect()
+        } else {
+            Vec::new()
+        };
+
+        let mut field_sources: HashMap<String, ConfigSource> = HashMap::new();
+        for key in ALL_FIELD_KEYS {
+            let k = key.to_string();
+            if global_keys.contains(&k) {
+                field_sources.insert(k, ConfigSource::Global);
+            } else {
+                field_sources.insert(k, ConfigSource::Default);
+            }
+        }
+
+        let mut config = config_result;
+        let mut resolved_local = None;
+        let mut resolved_profile = None;
+
+        if let Some(lp) = local_path
+            && lp.exists()
+        {
+            let local_content = fs::read_to_string(lp)?;
+            let local_keys = parse_ini(&local_content);
+            for key in local_keys.keys() {
+                field_sources.insert(key.clone(), ConfigSource::Local);
+            }
+            config.apply_overrides_from(&lp.to_path_buf())?;
+            resolved_local = Some(lp.to_path_buf());
+            resolved_profile = profile.map(|s| s.to_string());
+        }
+
+        Ok(ConfigWithSources {
+            config,
+            profile: resolved_profile,
+            global_path: global_path.to_path_buf(),
+            local_path: resolved_local,
+            field_sources,
+        })
     }
 
     /// Load config from a specific path.
@@ -664,5 +871,103 @@ mod tests {
         assert_eq!(config.provider, "claude");
         assert_eq!(config.api_key, "sk-global");
         assert_eq!(config.max_length, 72);
+    }
+
+    #[test]
+    fn test_list_profiles_empty() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().join(".forged");
+        ensure_config_dir_at(&base).unwrap();
+
+        let profiles = list_profiles_at(&base).unwrap();
+        assert!(profiles.is_empty());
+    }
+
+    #[test]
+    fn test_list_profiles_returns_names() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().join(".forged");
+        ensure_config_dir_at(&base).unwrap();
+
+        fs::write(base.join("locals").join("repo-a"), "locale=ja\n").unwrap();
+        fs::write(base.join("locals").join("repo-b"), "locale=pt-br\n").unwrap();
+
+        let profiles = list_profiles_at(&base).unwrap();
+        assert_eq!(profiles, vec!["repo-a", "repo-b"]);
+    }
+
+    #[test]
+    fn test_remove_local_profile_deletes() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().join(".forged");
+        ensure_config_dir_at(&base).unwrap();
+
+        let profile_path = base.join("locals").join("myrepo");
+        fs::write(&profile_path, "locale=ja\n").unwrap();
+        assert!(profile_path.exists());
+
+        let removed = remove_local_profile_at(&base, "myrepo").unwrap();
+        assert!(removed);
+        assert!(!profile_path.exists());
+    }
+
+    #[test]
+    fn test_remove_local_profile_nonexistent_ok() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().join(".forged");
+        ensure_config_dir_at(&base).unwrap();
+
+        let removed = remove_local_profile_at(&base, "nope").unwrap();
+        assert!(!removed);
+    }
+
+    #[test]
+    fn test_load_with_sources_global_only() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().join(".forged");
+        ensure_config_dir_at(&base).unwrap();
+
+        let global_path = base.join("global");
+        fs::write(&global_path, "provider=claude\napi_key=sk-test\nmodel=claude-sonnet-4-6\n").unwrap();
+
+        let result = Config::load_with_sources_at(&global_path, None, None).unwrap();
+
+        assert_eq!(result.config.provider, "claude");
+        assert!(result.profile.is_none());
+        assert!(result.local_path.is_none());
+        assert_eq!(result.field_sources["provider"], ConfigSource::Global);
+        assert_eq!(result.field_sources["api_key"], ConfigSource::Global);
+        assert_eq!(result.field_sources["model"], ConfigSource::Global);
+        assert_eq!(result.field_sources["locale"], ConfigSource::Default);
+        assert_eq!(result.field_sources["type"], ConfigSource::Default);
+        assert_eq!(result.field_sources["max_length"], ConfigSource::Default);
+    }
+
+    #[test]
+    fn test_load_with_sources_with_local_overrides() {
+        let tmp = TempDir::new().unwrap();
+        let base = tmp.path().join(".forged");
+        ensure_config_dir_at(&base).unwrap();
+
+        let global_path = base.join("global");
+        fs::write(&global_path, "provider=claude\napi_key=sk-test\nlocale=en\n").unwrap();
+
+        let local_path = base.join("locals").join("myrepo");
+        fs::write(&local_path, "locale=pt-br\ntype=conventional\n").unwrap();
+
+        let result =
+            Config::load_with_sources_at(&global_path, Some(&local_path), Some("myrepo")).unwrap();
+
+        assert_eq!(result.config.locale, "pt-br");
+        assert_eq!(result.config.commit_type, CommitType::Conventional);
+        assert_eq!(result.config.provider, "claude");
+        assert_eq!(result.profile, Some("myrepo".to_string()));
+        assert!(result.local_path.is_some());
+
+        // Sources
+        assert_eq!(result.field_sources["provider"], ConfigSource::Global);
+        assert_eq!(result.field_sources["locale"], ConfigSource::Local);
+        assert_eq!(result.field_sources["type"], ConfigSource::Local);
+        assert_eq!(result.field_sources["max_length"], ConfigSource::Default);
     }
 }

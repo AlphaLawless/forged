@@ -87,8 +87,20 @@ enum HookAction {
 
 #[derive(Subcommand)]
 enum SetupScope {
-    /// Set up a local (per-repo) configuration profile
-    Local,
+    /// Manage local (per-repo) configuration profiles
+    Local {
+        /// Remove the local config for this repo
+        #[arg(long, default_value_t = false)]
+        remove: bool,
+
+        /// Use an existing profile (interactive picker if name omitted)
+        #[arg(long = "use", value_name = "PROFILE", num_args = 0..=1, default_missing_value = "")]
+        use_profile: Option<String>,
+
+        /// List available local profiles
+        #[arg(long, default_value_t = false)]
+        list: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -116,7 +128,22 @@ async fn main() {
                 let existing = config::Config::load_global().ok();
                 commands::setup::run(existing).map(|_| ())
             }
-            Some(SetupScope::Local) => commands::setup::run_local().map(|_| ()),
+            Some(SetupScope::Local {
+                remove,
+                use_profile,
+                list,
+            }) => {
+                if remove {
+                    commands::setup::remove_local()
+                } else if list {
+                    commands::setup::list_profiles()
+                } else if let Some(name) = use_profile {
+                    let name = if name.is_empty() { None } else { Some(name) };
+                    commands::setup::use_profile(name.as_deref())
+                } else {
+                    commands::setup::run_local().map(|_| ())
+                }
+            }
         },
         Some(Commands::Upgrade) => commands::upgrade::run().await,
         Some(Commands::Hook { action }) => match action {

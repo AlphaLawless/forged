@@ -348,6 +348,38 @@ forged/
 
 ---
 
+### Fase 18f — Config Management UX [DONE]
+
+#### Remover config local [DONE]
+- [x] `forged setup local --remove` — remove profile + `.forged` pointer
+- [x] `remove_local_profile()` / `remove_local_profile_at()` em `config.rs`
+- [x] Mensagem clara se não há config local
+
+#### Listar e reusar profiles [DONE]
+- [x] `forged setup local --list` — lista profiles com paths
+- [x] `forged setup local --use [PROFILE]` — reusar profile existente (picker interativo se nome omitido)
+- [x] `list_profiles()` / `list_profiles_at()` em `config.rs`
+- [x] `profile_exists()` em `config.rs`
+
+#### Config list interativo [DONE]
+- [x] `forged config list` — Select interativo entre Global + profiles locais
+- [x] Merged view: campos com tags `[local]`, `[global]`, `[default]`
+- [x] Campos locais destacados em verde
+- [x] Clear screen entre iterações + `Press Enter to go back`
+- [x] `Esc` para sair do menu
+- [x] `ConfigSource` enum + `ConfigWithSources` struct
+- [x] `Config::load_with_sources()` / `load_with_sources_at()` — carrega com source tracking
+- [x] Path functions (`config_dir`, `global_config_path`, `locals_dir`, `local_config_path`) agora `pub(crate)`
+
+#### CLI [DONE]
+- [x] `SetupScope::Local` de unit variant para struct variant com `--remove`, `--use`, `--list`
+- [x] Dispatch atualizado em `main.rs`
+
+**Testes novos (6):**
+- config.rs: `list_profiles_empty`, `list_profiles_returns_names`, `remove_local_profile_deletes`, `remove_local_profile_nonexistent_ok`, `load_with_sources_global_only`, `load_with_sources_with_local_overrides`
+
+---
+
 ### Fase 19 — Multi-Provider com Failover [IN PROGRESS]
 
 #### 19a — AiError Enum + Trait Update [DONE]
@@ -393,7 +425,7 @@ forged/
 
 | Módulo | Testes |
 |---|---|
-| config.rs | 17 |
+| config.rs | 24 |
 | git.rs | 12 |
 | prompt.rs | 9 |
 | ai/sanitize.rs | 17 |
@@ -404,13 +436,14 @@ forged/
 | ai/providers/chatgpt.rs | 6 |
 | ai/providers/openrouter.rs | 5 |
 | ai/mod.rs | 9 |
-| commands/setup.rs | 10 |
+| commands/setup.rs | 11 |
 | commands/commit.rs | 8 |
 | commands/hook.rs | 6 |
 | commands/config.rs | 4 |
+| commands/upgrade.rs | 4 |
 | clipboard.rs | 2 |
 | main.rs (CLI) | 4 |
-| **Total unitários** | **131** |
+| **Total unitários** | **145** |
 
 ### Testes de Integração (`tests/`)
 
@@ -423,7 +456,7 @@ forged/
 | tests/git_hook.rs | 6 |
 | **Total integração** | **22** |
 
-| **Total geral** | **157 (todos passando)** |
+| **Total geral** | **167 (todos passando)** |
 
 ---
 
