@@ -3,11 +3,12 @@
 use std::fs;
 use std::process::Command;
 
-use anyhow::Result;
 use async_trait::async_trait;
 use tempfile::TempDir;
 
-use forged::ai::provider::{AiProvider, GenerateOpts, generate_description, generate_messages};
+use forged::ai::provider::{
+    AiError, AiProvider, GenerateOpts, generate_description, generate_messages,
+};
 use forged::config::CommitType;
 use forged::git::{CommitResult, commit, staged_diff};
 use forged::prompt;
@@ -41,7 +42,12 @@ impl AiProvider for MockProvider {
     fn default_model(&self) -> &str {
         "mock-1"
     }
-    async fn complete(&self, _system: &str, _user: &str, _opts: &GenerateOpts) -> Result<String> {
+    async fn complete(
+        &self,
+        _system: &str,
+        _user: &str,
+        _opts: &GenerateOpts,
+    ) -> Result<String, AiError> {
         let mut idx = self.call_index.lock().unwrap();
         let response = self.responses[*idx % self.responses.len()].clone();
         *idx += 1;

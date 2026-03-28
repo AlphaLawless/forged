@@ -3,6 +3,39 @@ use async_trait::async_trait;
 
 use super::sanitize;
 
+/// Error types for AI provider operations, classified for failover decisions.
+#[derive(Debug)]
+pub enum AiError {
+    /// Transient failure: 429 rate limit, timeout, 5xx, connection error.
+    /// Failover should try the next provider.
+    Retryable(String),
+    /// This provider is broken (401/403 invalid key) but others may work.
+    /// Failover should try the next provider.
+    ProviderFatal(String),
+    /// Fundamental failure (malformed config, empty response after parse).
+    /// No point trying other providers.
+    Fatal(String),
+}
+
+impl std::fmt::Display for AiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AiError::Retryable(msg) => write!(f, "{msg}"),
+            AiError::ProviderFatal(msg) => write!(f, "{msg}"),
+            AiError::Fatal(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for AiError {}
+
+impl AiError {
+    /// Returns true if failover to the next provider should be attempted.
+    pub fn should_failover(&self) -> bool {
+        matches!(self, AiError::Retryable(_) | AiError::ProviderFatal(_))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GenerateOpts {
     pub model: String,
@@ -23,7 +56,12 @@ pub trait AiProvider: Send + Sync + std::fmt::Debug {
     }
 
     /// Send a single completion request and return the raw response text.
-    async fn complete(&self, system: &str, user: &str, opts: &GenerateOpts) -> Result<String>;
+    async fn complete(
+        &self,
+        system: &str,
+        user: &str,
+        opts: &GenerateOpts,
+    ) -> Result<String, AiError>;
 }
 
 /// Generate a commit body (description) for a given subject line.
@@ -34,7 +72,7 @@ pub async fn generate_description(
     subject: &str,
     diff: &str,
     opts: &GenerateOpts,
-) -> Result<String> {
+) -> Result<String, AiError> {
     let user_prompt = format!("Title: {subject}\n\nDiff:\n{diff}");
     let raw = provider.complete(system, &user_prompt, opts).await?;
     Ok(sanitize::sanitize_description(&raw))
@@ -46,7 +84,7 @@ pub async fn generate_messages(
     system: &str,
     user: &str,
     opts: &GenerateOpts,
-) -> Result<Vec<String>> {
+) -> Result<Vec<String>, AiError> {
     let futures: Vec<_> = (0..opts.completions)
         .map(|_| provider.complete(system, user, opts))
         .collect();
@@ -54,21 +92,26 @@ pub async fn generate_messages(
     let results = futures::future::join_all(futures).await;
 
     let mut messages = Vec::new();
+    let mut last_error: Option<AiError> = None;
     for result in results {
         match result {
             Ok(text) => messages.push(sanitize::sanitize_title(&text)),
             Err(e) => {
-                // If all completions fail, we'll return the last error below.
-                // If at least one succeeds, we skip failures.
-                if messages.is_empty() && opts.completions == 1 {
+                // If it's Fatal, propagate immediately
+                if matches!(e, AiError::Fatal(_)) {
                     return Err(e);
                 }
+                last_error = Some(e);
             }
         }
     }
 
     if messages.is_empty() {
-        anyhow::bail!("All AI completions failed. Check your API key and network connection.");
+        return Err(last_error.unwrap_or_else(|| {
+            AiError::Fatal(
+                "All AI completions failed. Check your API key and network connection.".into(),
+            )
+        }));
     }
 
     Ok(sanitize::deduplicate(messages))
@@ -96,10 +139,7 @@ mod tests {
             _system: &str,
             _user: &str,
             _opts: &GenerateOpts,
-        ) -> Result<String> {
-            // Return responses in rotation based on a simple counter
-            // Since we can't easily use interior mutability here without Mutex,
-            // just return the first response for simplicity
+        ) -> Result<String, AiError> {
             Ok(self.responses[0].clone())
         }
     }
@@ -122,7 +162,7 @@ mod tests {
             _system: &str,
             _user: &str,
             _opts: &GenerateOpts,
-        ) -> Result<String> {
+        ) -> Result<String, AiError> {
             use std::sync::atomic::{AtomicUsize, Ordering};
             static COUNTER: AtomicUsize = AtomicUsize::new(0);
             let idx = COUNTER.fetch_add(1, Ordering::SeqCst) % self.responses.len();
@@ -214,7 +254,7 @@ mod tests {
             _system: &str,
             user: &str,
             _opts: &GenerateOpts,
-        ) -> Result<String> {
+        ) -> Result<String, AiError> {
             self.captured_user.lock().unwrap().push(user.to_string());
             Ok("- Some change".to_string())
         }

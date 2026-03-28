@@ -2,10 +2,11 @@
 //! Tests generate_messages + generate_description combined, simulating
 //! the subject+body flow without needing git.
 
-use anyhow::Result;
 use async_trait::async_trait;
 
-use forged::ai::provider::{AiProvider, GenerateOpts, generate_description, generate_messages};
+use forged::ai::provider::{
+    AiError, AiProvider, GenerateOpts, generate_description, generate_messages,
+};
 use forged::config::CommitType;
 use forged::prompt;
 
@@ -36,7 +37,12 @@ impl AiProvider for SequentialProvider {
     fn default_model(&self) -> &str {
         "seq-1"
     }
-    async fn complete(&self, _system: &str, _user: &str, _opts: &GenerateOpts) -> Result<String> {
+    async fn complete(
+        &self,
+        _system: &str,
+        _user: &str,
+        _opts: &GenerateOpts,
+    ) -> Result<String, AiError> {
         let mut idx = self.call_index.lock().unwrap();
         let resp = self.responses[*idx % self.responses.len()].clone();
         *idx += 1;
@@ -58,7 +64,12 @@ impl AiProvider for ConstProvider {
     fn default_model(&self) -> &str {
         "const-1"
     }
-    async fn complete(&self, _system: &str, _user: &str, _opts: &GenerateOpts) -> Result<String> {
+    async fn complete(
+        &self,
+        _system: &str,
+        _user: &str,
+        _opts: &GenerateOpts,
+    ) -> Result<String, AiError> {
         Ok(self.response.clone())
     }
 }
@@ -77,7 +88,12 @@ impl AiProvider for EmptyBodyProvider {
     fn default_model(&self) -> &str {
         "empty-1"
     }
-    async fn complete(&self, _system: &str, user: &str, _opts: &GenerateOpts) -> Result<String> {
+    async fn complete(
+        &self,
+        _system: &str,
+        user: &str,
+        _opts: &GenerateOpts,
+    ) -> Result<String, AiError> {
         // If user prompt contains "Title:", it's a description call → return empty
         if user.contains("Title:") {
             Ok("".to_string())

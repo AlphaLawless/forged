@@ -1,10 +1,9 @@
-use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use crate::ai::provider::{AiProvider, GenerateOpts};
+use crate::ai::provider::{AiError, AiProvider, GenerateOpts};
 
 /// Configuration for an OpenAI-compatible provider.
 pub struct OpenAiCompatConfig {
@@ -108,7 +107,12 @@ impl AiProvider for OpenAiCompatProvider {
         self.config.default_timeout
     }
 
-    async fn complete(&self, system: &str, user: &str, opts: &GenerateOpts) -> Result<String> {
+    async fn complete(
+        &self,
+        system: &str,
+        user: &str,
+        opts: &GenerateOpts,
+    ) -> Result<String, AiError> {
         let url = format!("{}/chat/completions", self.config.base_url);
 
         let body = RequestBody {
@@ -146,17 +150,17 @@ impl AiProvider for OpenAiCompatProvider {
             .await
             .map_err(|e| {
                 if e.is_timeout() {
-                    anyhow::anyhow!(
+                    AiError::Retryable(format!(
                         "Request timed out after {} seconds. The API took too long to respond.",
                         opts.timeout_secs
-                    )
+                    ))
                 } else if e.is_connect() {
-                    anyhow::anyhow!(
+                    AiError::Retryable(format!(
                         "Failed to connect to {} API. Are you connected to the internet?",
                         provider_name
-                    )
+                    ))
                 } else {
-                    anyhow::anyhow!("HTTP request failed: {e}")
+                    AiError::Retryable(format!("HTTP request failed: {e}"))
                 }
             })?;
 
@@ -170,46 +174,57 @@ impl AiProvider for OpenAiCompatProvider {
                 .and_then(|d| d.message);
 
             if self.config.invalid_key_statuses.contains(&status.as_u16()) {
-                if let Some(msg) = api_msg {
-                    bail!(
-                        "Invalid API key for {} ({}): {}",
-                        provider_name,
-                        status.as_u16(),
-                        msg
-                    );
-                }
-                bail!(
-                    "Invalid API key. Check your {} API key and try again.",
-                    provider_name
-                );
+                let msg = api_msg
+                    .map(|m| {
+                        format!(
+                            "Invalid API key for {} ({}): {m}",
+                            provider_name,
+                            status.as_u16()
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        format!(
+                            "Invalid API key. Check your {} API key and try again.",
+                            provider_name
+                        )
+                    });
+                return Err(AiError::ProviderFatal(msg));
             }
 
             if status == 429 {
-                bail!("Rate limit exceeded. Please wait a moment and try again.");
+                return Err(AiError::Retryable(
+                    "Rate limit exceeded. Please wait a moment and try again.".into(),
+                ));
             }
 
-            if let Some(msg) = api_msg {
-                bail!("{} API error ({}): {}", provider_name, status.as_u16(), msg);
-            }
-            bail!(
-                "{} API error ({}): {}",
-                provider_name,
-                status.as_u16(),
-                body_text
-            );
+            let msg = api_msg
+                .map(|m| format!("{} API error ({}): {m}", provider_name, status.as_u16()))
+                .unwrap_or_else(|| {
+                    format!(
+                        "{} API error ({}): {}",
+                        provider_name,
+                        status.as_u16(),
+                        body_text
+                    )
+                });
+            return Err(AiError::Retryable(msg));
         }
 
-        let api_response: ApiResponse = response
-            .json()
-            .await
-            .context(format!("Failed to parse {} API response", provider_name))?;
+        let api_response: ApiResponse = response.json().await.map_err(|e| {
+            AiError::Fatal(format!(
+                "Failed to parse {} API response: {e}",
+                provider_name
+            ))
+        })?;
 
         let text = api_response
             .choices
             .into_iter()
             .next()
             .and_then(|c| c.message.content)
-            .context(format!("{} API response contained no text", provider_name))?;
+            .ok_or_else(|| {
+                AiError::Fatal(format!("{} API response contained no text", provider_name))
+            })?;
 
         Ok(text)
     }

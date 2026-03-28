@@ -1,10 +1,9 @@
-use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-use crate::ai::provider::{AiProvider, GenerateOpts};
+use crate::ai::provider::{AiError, AiProvider, GenerateOpts};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
@@ -81,7 +80,12 @@ impl AiProvider for ClaudeProvider {
         DEFAULT_MODEL
     }
 
-    async fn complete(&self, system: &str, user: &str, opts: &GenerateOpts) -> Result<String> {
+    async fn complete(
+        &self,
+        system: &str,
+        user: &str,
+        opts: &GenerateOpts,
+    ) -> Result<String, AiError> {
         let url = format!("{}/v1/messages", self.base_url);
 
         let body = RequestBody {
@@ -107,51 +111,60 @@ impl AiProvider for ClaudeProvider {
             .await
             .map_err(|e| {
                 if e.is_timeout() {
-                    anyhow::anyhow!(
+                    AiError::Retryable(format!(
                         "Request timed out after {} seconds. The API took too long to respond.",
                         opts.timeout_secs
-                    )
+                    ))
                 } else if e.is_connect() {
-                    anyhow::anyhow!(
+                    AiError::Retryable(
                         "Failed to connect to Anthropic API. Are you connected to the internet?"
+                            .into(),
                     )
                 } else {
-                    anyhow::anyhow!("HTTP request failed: {e}")
+                    AiError::Retryable(format!("HTTP request failed: {e}"))
                 }
             })?;
 
         let status = response.status();
 
-        if status == 401 {
-            bail!("Invalid API key. Check your Claude API key and try again.");
-        }
-
-        if status == 429 {
-            bail!("Rate limit exceeded. Please wait a moment and try again.");
-        }
-
         if !status.is_success() {
             let body_text = response.text().await.unwrap_or_default();
-            // Try to parse error message from API
-            if let Ok(api_err) = serde_json::from_str::<ApiError>(&body_text)
-                && let Some(detail) = api_err.error
-                && let Some(msg) = detail.message
-            {
-                bail!("Claude API error ({}): {}", status.as_u16(), msg);
+            let api_msg = serde_json::from_str::<ApiError>(&body_text)
+                .ok()
+                .and_then(|e| e.error)
+                .and_then(|d| d.message);
+
+            if status == 401 {
+                let msg = api_msg
+                    .map(|m| format!("Invalid API key for Claude (401): {m}"))
+                    .unwrap_or_else(|| {
+                        "Invalid API key. Check your Claude API key and try again.".into()
+                    });
+                return Err(AiError::ProviderFatal(msg));
             }
-            bail!("Claude API error ({}): {}", status.as_u16(), body_text);
+
+            if status == 429 {
+                return Err(AiError::Retryable(
+                    "Rate limit exceeded. Please wait a moment and try again.".into(),
+                ));
+            }
+
+            let msg = api_msg
+                .map(|m| format!("Claude API error ({}): {m}", status.as_u16()))
+                .unwrap_or_else(|| format!("Claude API error ({}): {body_text}", status.as_u16()));
+            return Err(AiError::Retryable(msg));
         }
 
         let api_response: ApiResponse = response
             .json()
             .await
-            .context("Failed to parse Claude API response")?;
+            .map_err(|e| AiError::Fatal(format!("Failed to parse Claude API response: {e}")))?;
 
         let text = api_response
             .content
             .into_iter()
             .find_map(|block| block.text)
-            .context("Claude API response contained no text")?;
+            .ok_or_else(|| AiError::Fatal("Claude API response contained no text".into()))?;
 
         Ok(text)
     }
