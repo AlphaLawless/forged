@@ -34,11 +34,19 @@ impl CommitType {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderEntry {
+    pub name: String,
+    pub api_key: String,
+    pub model: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub provider: String,
     pub api_key: String,
     pub model: String,
+    pub fallback_providers: Vec<ProviderEntry>,
     pub locale: String,
     pub commit_type: CommitType,
     pub max_length: u32,
@@ -52,6 +60,7 @@ impl Default for Config {
             provider: String::new(),
             api_key: String::new(),
             model: String::new(),
+            fallback_providers: Vec::new(),
             locale: "en".into(),
             commit_type: CommitType::Plain,
             max_length: 72,
@@ -121,22 +130,59 @@ fn ensure_config_dir_at(base: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Parse a simple INI-like file (key=value per line, no sections).
-fn parse_ini(content: &str) -> HashMap<String, String> {
-    let mut map = HashMap::new();
+/// Parsed INI with support for [section] blocks.
+#[derive(Debug, Default)]
+struct ParsedIni {
+    global: HashMap<String, String>,
+    sections: HashMap<String, HashMap<String, String>>,
+}
+
+/// Parse INI content with section support.
+/// Lines before any [section] go into `global`. Lines after [section.name]
+/// go into `sections["name"]`.
+fn parse_ini_sections(content: &str) -> ParsedIni {
+    let mut result = ParsedIni::default();
+    let mut current_section: Option<String> = None;
+
     for line in content.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
         }
+        if line.starts_with('[') && line.ends_with(']') {
+            let section = line[1..line.len() - 1].trim();
+            // Strip "provider." prefix if present
+            let name = section.strip_prefix("provider.").unwrap_or(section);
+            current_section = Some(name.to_string());
+            continue;
+        }
         if let Some((key, value)) = line.split_once('=') {
-            map.insert(key.trim().to_string(), value.trim().to_string());
+            let k = key.trim().to_string();
+            let v = value.trim().to_string();
+            match &current_section {
+                Some(section) => {
+                    result
+                        .sections
+                        .entry(section.clone())
+                        .or_default()
+                        .insert(k, v);
+                }
+                None => {
+                    result.global.insert(k, v);
+                }
+            }
         }
     }
-    map
+
+    result
 }
 
-/// Serialize a HashMap back to INI format.
+/// Parse a simple INI-like file (flat, no sections — for backwards compat).
+fn parse_ini(content: &str) -> HashMap<String, String> {
+    parse_ini_sections(content).global
+}
+
+/// Serialize global keys to flat INI format.
 fn serialize_ini(map: &HashMap<String, String>) -> String {
     let mut keys: Vec<&String> = map.keys().collect();
     keys.sort();
@@ -144,6 +190,50 @@ fn serialize_ini(map: &HashMap<String, String>) -> String {
         .map(|k| format!("{}={}", k, map[*k]))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Serialize a ParsedIni (global keys + sections) to INI format.
+fn serialize_parsed(parsed: &ParsedIni) -> String {
+    let mut output = serialize_ini(&parsed.global);
+
+    // Sort section names for deterministic output
+    let mut section_names: Vec<&String> = parsed.sections.keys().collect();
+    section_names.sort();
+
+    for name in section_names {
+        let section = &parsed.sections[name];
+        if section.is_empty() {
+            continue;
+        }
+        output.push_str(&format!("\n\n[provider.{name}]\n"));
+        output.push_str(&serialize_ini(section));
+    }
+
+    output
+}
+
+const MAX_PROVIDERS: usize = 4;
+const VALID_PROVIDER_NAMES: &[&str] = &["claude", "gemini", "chatgpt", "openrouter"];
+
+/// Collect source-trackable keys from INI content.
+/// Maps legacy `provider`/`api_key`/`model` to `providers` for source tracking.
+fn collect_source_keys(content: &str) -> Vec<String> {
+    let parsed = parse_ini_sections(content);
+    let mut keys: Vec<String> = Vec::new();
+
+    for k in parsed.global.keys() {
+        match k.as_str() {
+            // Legacy keys map to "providers" for source tracking
+            "provider" | "api_key" | "model" => {
+                if !keys.contains(&"providers".to_string()) {
+                    keys.push("providers".to_string());
+                }
+            }
+            _ => keys.push(k.clone()),
+        }
+    }
+
+    keys
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -163,9 +253,7 @@ pub struct ConfigWithSources {
 }
 
 const ALL_FIELD_KEYS: &[&str] = &[
-    "provider",
-    "api_key",
-    "model",
+    "providers",
     "locale",
     "type",
     "max_length",
@@ -289,9 +377,9 @@ impl Config {
         let config_result = Self::load_from(&gpath)?;
 
         // Parse global INI to find which keys are explicitly set
-        let global_keys: Vec<String> = if gpath.exists() {
+        let global_keys = if gpath.exists() {
             let content = fs::read_to_string(&gpath)?;
-            parse_ini(&content).keys().cloned().collect()
+            collect_source_keys(&content)
         } else {
             Vec::new()
         };
@@ -319,10 +407,9 @@ impl Config {
                 if !profile.is_empty() {
                     let local_path = local_config_path(&profile)?;
                     if local_path.exists() {
-                        // Parse local INI to find which keys are overridden
                         let local_content = fs::read_to_string(&local_path)?;
-                        let local_keys = parse_ini(&local_content);
-                        for key in local_keys.keys() {
+                        let local_keys = collect_source_keys(&local_content);
+                        for key in &local_keys {
                             field_sources.insert(key.clone(), ConfigSource::Local);
                         }
 
@@ -351,9 +438,9 @@ impl Config {
     ) -> Result<ConfigWithSources> {
         let config_result = Self::load_from(&global_path.to_path_buf())?;
 
-        let global_keys: Vec<String> = if global_path.exists() {
+        let global_keys = if global_path.exists() {
             let content = fs::read_to_string(global_path)?;
-            parse_ini(&content).keys().cloned().collect()
+            collect_source_keys(&content)
         } else {
             Vec::new()
         };
@@ -376,8 +463,8 @@ impl Config {
             && lp.exists()
         {
             let local_content = fs::read_to_string(lp)?;
-            let local_keys = parse_ini(&local_content);
-            for key in local_keys.keys() {
+            let local_keys = collect_source_keys(&local_content);
+            for key in &local_keys {
                 field_sources.insert(key.clone(), ConfigSource::Local);
             }
             config.apply_overrides_from(&lp.to_path_buf())?;
@@ -404,14 +491,17 @@ impl Config {
 
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-        let map = parse_ini(&content);
-        config.apply_map(&map)?;
+        let parsed = parse_ini_sections(&content);
+        config.apply_parsed(&parsed)?;
 
         Ok(config)
     }
 
-    /// Apply key-value pairs from a parsed INI map. Only keys present are touched.
+    /// Apply key-value pairs from a flat INI map (no sections). Only keys present are touched.
     fn apply_map(&mut self, map: &HashMap<String, String>) -> Result<()> {
+        self.apply_common_fields(map)?;
+
+        // Legacy single-provider fields
         if let Some(v) = map.get("provider") {
             self.provider = v.clone();
         }
@@ -421,6 +511,61 @@ impl Config {
         if let Some(v) = map.get("model") {
             self.model = v.clone();
         }
+        Ok(())
+    }
+
+    /// Apply parsed INI with sections support.
+    fn apply_parsed(&mut self, parsed: &ParsedIni) -> Result<()> {
+        self.apply_common_fields(&parsed.global)?;
+
+        if let Some(providers_str) = parsed.global.get("providers") {
+            // New multi-provider format
+            let names: Vec<&str> = providers_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            if names.is_empty() {
+                bail!("'providers' cannot be empty");
+            }
+            if names.len() > MAX_PROVIDERS {
+                bail!("Maximum of {MAX_PROVIDERS} providers allowed, got {}", names.len());
+            }
+            for name in &names {
+                if !VALID_PROVIDER_NAMES.contains(name) {
+                    bail!("Unknown provider: '{name}'. Available: {}", VALID_PROVIDER_NAMES.join(", "));
+                }
+            }
+
+            // First provider = primary
+            let primary_section = parsed.sections.get(names[0]).cloned().unwrap_or_default();
+            self.provider = names[0].to_string();
+            self.api_key = primary_section.get("api_key").cloned().unwrap_or_default();
+            self.model = primary_section.get("model").cloned().unwrap_or_default();
+
+            // Remaining = fallbacks
+            self.fallback_providers.clear();
+            for name in &names[1..] {
+                let section = parsed.sections.get(*name).cloned().unwrap_or_default();
+                self.fallback_providers.push(ProviderEntry {
+                    name: name.to_string(),
+                    api_key: section.get("api_key").cloned().unwrap_or_default(),
+                    model: section.get("model").cloned().unwrap_or_default(),
+                });
+            }
+        } else {
+            // Legacy single-provider fields (no providers= key)
+            if let Some(v) = parsed.global.get("provider") {
+                self.provider = v.clone();
+            }
+            if let Some(v) = parsed.global.get("api_key") {
+                self.api_key = v.clone();
+            }
+            if let Some(v) = parsed.global.get("model") {
+                self.model = v.clone();
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply common (non-provider) fields from a map.
+    fn apply_common_fields(&mut self, map: &HashMap<String, String>) -> Result<()> {
         if let Some(v) = map.get("locale") {
             if v.is_empty() {
                 bail!("Config 'locale' cannot be empty");
@@ -460,8 +605,8 @@ impl Config {
         }
         let content = fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
-        let map = parse_ini(&content);
-        self.apply_map(&map)
+        let parsed = parse_ini_sections(&content);
+        self.apply_parsed(&parsed)
     }
 
     /// Save config to the global path (~/.forged/global).
@@ -473,33 +618,53 @@ impl Config {
 
     /// Save only the fields that differ from a base config (for local overrides).
     pub fn save_diff_to(&self, path: &PathBuf, base: &Config) -> Result<()> {
-        let mut map = HashMap::new();
-        if self.provider != base.provider && !self.provider.is_empty() {
-            map.insert("provider".into(), self.provider.clone());
-        }
-        if self.api_key != base.api_key && !self.api_key.is_empty() {
-            map.insert("api_key".into(), self.api_key.clone());
-        }
-        if self.model != base.model && !self.model.is_empty() {
-            map.insert("model".into(), self.model.clone());
-        }
+        let mut parsed = ParsedIni::default();
+
+        // Common fields diff
         if self.locale != base.locale {
-            map.insert("locale".into(), self.locale.clone());
+            parsed.global.insert("locale".into(), self.locale.clone());
         }
         if self.commit_type != base.commit_type {
-            map.insert("type".into(), self.commit_type.as_str().into());
+            parsed
+                .global
+                .insert("type".into(), self.commit_type.as_str().into());
         }
         if self.max_length != base.max_length {
-            map.insert("max_length".into(), self.max_length.to_string());
+            parsed
+                .global
+                .insert("max_length".into(), self.max_length.to_string());
         }
         if self.generate != base.generate {
-            map.insert("generate".into(), self.generate.to_string());
+            parsed
+                .global
+                .insert("generate".into(), self.generate.to_string());
         }
         if self.timeout != base.timeout {
-            map.insert("timeout".into(), self.timeout.to_string());
+            parsed
+                .global
+                .insert("timeout".into(), self.timeout.to_string());
         }
 
-        let content = serialize_ini(&map);
+        // Provider diff: if providers differ at all, emit full provider block
+        let providers_differ = self.provider != base.provider
+            || self.api_key != base.api_key
+            || self.model != base.model
+            || self.fallback_providers != base.fallback_providers;
+
+        if providers_differ && !self.provider.is_empty() {
+            let provider_parsed = self.to_parsed_ini();
+            // Copy providers= key and all sections
+            if let Some(providers_val) = provider_parsed.global.get("providers") {
+                parsed
+                    .global
+                    .insert("providers".into(), providers_val.clone());
+            }
+            for (name, section) in &provider_parsed.sections {
+                parsed.sections.insert(name.clone(), section.clone());
+            }
+        }
+
+        let content = serialize_parsed(&parsed);
         fs::write(path, content)
             .with_context(|| format!("Failed to write config file: {}", path.display()))?;
         Ok(())
@@ -513,28 +678,72 @@ impl Config {
         self.save_diff_to(&path, &global)
     }
 
-    /// Save config to a specific path.
+    /// Save config to a specific path (always uses section format).
     pub fn save_to(&self, path: &PathBuf) -> Result<()> {
-        let mut map = HashMap::new();
-        if !self.provider.is_empty() {
-            map.insert("provider".into(), self.provider.clone());
-        }
-        if !self.api_key.is_empty() {
-            map.insert("api_key".into(), self.api_key.clone());
-        }
-        if !self.model.is_empty() {
-            map.insert("model".into(), self.model.clone());
-        }
-        map.insert("locale".into(), self.locale.clone());
-        map.insert("type".into(), self.commit_type.as_str().into());
-        map.insert("max_length".into(), self.max_length.to_string());
-        map.insert("generate".into(), self.generate.to_string());
-        map.insert("timeout".into(), self.timeout.to_string());
-
-        let content = serialize_ini(&map);
+        let parsed = self.to_parsed_ini();
+        let content = serialize_parsed(&parsed);
         fs::write(path, content)
             .with_context(|| format!("Failed to write config file: {}", path.display()))?;
         Ok(())
+    }
+
+    /// Build a ParsedIni representation of this config.
+    fn to_parsed_ini(&self) -> ParsedIni {
+        let mut parsed = ParsedIni::default();
+
+        // Common fields in global section
+        parsed.global.insert("locale".into(), self.locale.clone());
+        parsed
+            .global
+            .insert("type".into(), self.commit_type.as_str().into());
+        parsed
+            .global
+            .insert("max_length".into(), self.max_length.to_string());
+        parsed
+            .global
+            .insert("generate".into(), self.generate.to_string());
+        parsed
+            .global
+            .insert("timeout".into(), self.timeout.to_string());
+
+        if !self.provider.is_empty() {
+            // Build providers list
+            let mut all_names = vec![self.provider.clone()];
+            for entry in &self.fallback_providers {
+                all_names.push(entry.name.clone());
+            }
+            parsed
+                .global
+                .insert("providers".into(), all_names.join(","));
+
+            // Primary provider section
+            let mut primary = HashMap::new();
+            if !self.api_key.is_empty() {
+                primary.insert("api_key".into(), self.api_key.clone());
+            }
+            if !self.model.is_empty() {
+                primary.insert("model".into(), self.model.clone());
+            }
+            if !primary.is_empty() {
+                parsed.sections.insert(self.provider.clone(), primary);
+            }
+
+            // Fallback provider sections
+            for entry in &self.fallback_providers {
+                let mut section = HashMap::new();
+                if !entry.api_key.is_empty() {
+                    section.insert("api_key".into(), entry.api_key.clone());
+                }
+                if !entry.model.is_empty() {
+                    section.insert("model".into(), entry.model.clone());
+                }
+                if !section.is_empty() {
+                    parsed.sections.insert(entry.name.clone(), section);
+                }
+            }
+        }
+
+        parsed
     }
 
     /// Set a single key-value pair, validating the key and value.
@@ -673,6 +882,7 @@ mod tests {
             max_length: 50,
             generate: 3,
             timeout: 20,
+            ..Config::default()
         };
         config.save_to(&path).unwrap();
 
@@ -935,9 +1145,7 @@ mod tests {
         assert_eq!(result.config.provider, "claude");
         assert!(result.profile.is_none());
         assert!(result.local_path.is_none());
-        assert_eq!(result.field_sources["provider"], ConfigSource::Global);
-        assert_eq!(result.field_sources["api_key"], ConfigSource::Global);
-        assert_eq!(result.field_sources["model"], ConfigSource::Global);
+        assert_eq!(result.field_sources["providers"], ConfigSource::Global);
         assert_eq!(result.field_sources["locale"], ConfigSource::Default);
         assert_eq!(result.field_sources["type"], ConfigSource::Default);
         assert_eq!(result.field_sources["max_length"], ConfigSource::Default);
@@ -965,9 +1173,150 @@ mod tests {
         assert!(result.local_path.is_some());
 
         // Sources
-        assert_eq!(result.field_sources["provider"], ConfigSource::Global);
+        assert_eq!(result.field_sources["providers"], ConfigSource::Global);
         assert_eq!(result.field_sources["locale"], ConfigSource::Local);
         assert_eq!(result.field_sources["type"], ConfigSource::Local);
         assert_eq!(result.field_sources["max_length"], ConfigSource::Default);
+    }
+
+    #[test]
+    fn test_parse_ini_with_sections() {
+        let content = "locale=en\nproviders=claude,gemini\n\n[provider.claude]\napi_key=sk-test\nmodel=claude-sonnet-4-6\n\n[provider.gemini]\napi_key=AIza\nmodel=gemini-2.5-flash\n";
+        let parsed = parse_ini_sections(content);
+
+        assert_eq!(parsed.global["locale"], "en");
+        assert_eq!(parsed.global["providers"], "claude,gemini");
+        assert_eq!(parsed.sections["claude"]["api_key"], "sk-test");
+        assert_eq!(parsed.sections["claude"]["model"], "claude-sonnet-4-6");
+        assert_eq!(parsed.sections["gemini"]["api_key"], "AIza");
+        assert_eq!(parsed.sections["gemini"]["model"], "gemini-2.5-flash");
+    }
+
+    #[test]
+    fn test_apply_multi_provider() {
+        let content = "providers=claude,gemini\nlocale=pt-br\n\n[provider.claude]\napi_key=sk-test\nmodel=claude-sonnet-4-6\n\n[provider.gemini]\napi_key=AIza\nmodel=gemini-2.5-flash\n";
+        let mut config = Config::default();
+        let parsed = parse_ini_sections(content);
+        config.apply_parsed(&parsed).unwrap();
+
+        assert_eq!(config.provider, "claude");
+        assert_eq!(config.api_key, "sk-test");
+        assert_eq!(config.model, "claude-sonnet-4-6");
+        assert_eq!(config.locale, "pt-br");
+        assert_eq!(config.fallback_providers.len(), 1);
+        assert_eq!(config.fallback_providers[0].name, "gemini");
+        assert_eq!(config.fallback_providers[0].api_key, "AIza");
+        assert_eq!(config.fallback_providers[0].model, "gemini-2.5-flash");
+    }
+
+    #[test]
+    fn test_apply_single_provider_backwards_compat() {
+        let content = "provider=claude\napi_key=sk-test\nmodel=claude-sonnet-4-6\nlocale=en\n";
+        let mut config = Config::default();
+        let parsed = parse_ini_sections(content);
+        config.apply_parsed(&parsed).unwrap();
+
+        assert_eq!(config.provider, "claude");
+        assert_eq!(config.api_key, "sk-test");
+        assert_eq!(config.model, "claude-sonnet-4-6");
+        assert!(config.fallback_providers.is_empty());
+    }
+
+    #[test]
+    fn test_save_roundtrip_multi_provider() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("config");
+
+        let config = Config {
+            provider: "claude".into(),
+            api_key: "sk-test".into(),
+            model: "claude-sonnet-4-6".into(),
+            fallback_providers: vec![ProviderEntry {
+                name: "gemini".into(),
+                api_key: "AIza".into(),
+                model: "gemini-2.5-flash".into(),
+            }],
+            locale: "pt-br".into(),
+            ..Config::default()
+        };
+        config.save_to(&path).unwrap();
+
+        let loaded = Config::load_from(&path).unwrap();
+        assert_eq!(loaded.provider, "claude");
+        assert_eq!(loaded.api_key, "sk-test");
+        assert_eq!(loaded.model, "claude-sonnet-4-6");
+        assert_eq!(loaded.locale, "pt-br");
+        assert_eq!(loaded.fallback_providers.len(), 1);
+        assert_eq!(loaded.fallback_providers[0].name, "gemini");
+        assert_eq!(loaded.fallback_providers[0].api_key, "AIza");
+    }
+
+    #[test]
+    fn test_save_single_provider_uses_sections() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("config");
+
+        let config = Config {
+            provider: "claude".into(),
+            api_key: "sk-test".into(),
+            model: "claude-sonnet-4-6".into(),
+            ..Config::default()
+        };
+        config.save_to(&path).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("providers=claude"));
+        assert!(content.contains("[provider.claude]"));
+        assert!(content.contains("api_key=sk-test"));
+        // Should NOT have legacy flat keys
+        assert!(!content.contains("provider=claude"));
+    }
+
+    #[test]
+    fn test_save_diff_multi_provider() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("local");
+
+        let base = Config {
+            provider: "claude".into(),
+            api_key: "sk-base".into(),
+            ..Config::default()
+        };
+        let modified = Config {
+            provider: "gemini".into(),
+            api_key: "AIza".into(),
+            model: "gemini-2.5-flash".into(),
+            fallback_providers: vec![ProviderEntry {
+                name: "claude".into(),
+                api_key: "sk-fallback".into(),
+                model: "claude-sonnet-4-6".into(),
+            }],
+            ..Config::default()
+        };
+
+        modified.save_diff_to(&path, &base).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("providers=gemini,claude"));
+        assert!(content.contains("[provider.gemini]"));
+        assert!(content.contains("[provider.claude]"));
+    }
+
+    #[test]
+    fn test_max_four_providers_validation() {
+        let content = "providers=claude,gemini,chatgpt,openrouter,claude\n";
+        let mut config = Config::default();
+        let parsed = parse_ini_sections(content);
+        let err = config.apply_parsed(&parsed).unwrap_err();
+        assert!(err.to_string().contains("Maximum of 4"));
+    }
+
+    #[test]
+    fn test_invalid_provider_name_validation() {
+        let content = "providers=claude,foobar\n";
+        let mut config = Config::default();
+        let parsed = parse_ini_sections(content);
+        let err = config.apply_parsed(&parsed).unwrap_err();
+        assert!(err.to_string().contains("Unknown provider"));
     }
 }

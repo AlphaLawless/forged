@@ -2,7 +2,10 @@ use anyhow::{Context, Result, bail};
 use colored::Colorize;
 
 use crate::ai;
-use crate::ai::provider::{GenerateOpts, generate_description, generate_messages};
+use crate::ai::FailoverReport;
+use crate::ai::provider::{
+    GenerateOpts, generate_description_with_failover, generate_messages_with_failover,
+};
 use crate::clipboard;
 use crate::config::CommitType;
 use crate::config::Config;
@@ -75,24 +78,12 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
         println!("{} Detected {} staged {}", "::".dimmed(), file_count, label);
     }
 
-    let provider = ai::build_provider(&config)?;
+    let providers = ai::build_providers(&config)?;
 
     let mut session =
         SessionConfig::from_config(&config, opts.commit_type.as_deref(), opts.generate)?;
 
-    let model = if config.model.is_empty() {
-        provider.default_model().to_string()
-    } else {
-        config.model.clone()
-    };
-
     let diff = git::truncate_diff(&staged.diff);
-
-    let timeout = if config.timeout > 0 {
-        config.timeout
-    } else {
-        provider.default_timeout()
-    };
 
     let custom_prompt = opts.custom_prompt.as_deref();
 
@@ -105,16 +96,20 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
         );
     }
 
-    let params = build_generation_params(&session, &model, timeout, custom_prompt);
+    let params = build_generation_params(&session, custom_prompt);
 
-    let messages = generate_full_messages(
-        provider.as_ref(),
+    let (messages, report) = generate_full_messages(
+        &providers,
         &params.system,
         params.desc_system.as_deref(),
         &diff,
         &params.gen_opts,
     )
     .await?;
+
+    if !headless {
+        print_failover_report(&report);
+    }
 
     // Hook mode: write message to file and exit
     if let Some(ref hook_file) = opts.hook_file {
@@ -183,30 +178,34 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
                 }
             }
             Action::Regenerate => {
-                let params = build_generation_params(&session, &model, timeout, custom_prompt);
+                let params = build_generation_params(&session, custom_prompt);
                 println!("{} Regenerating...", "::".dimmed());
-                current_messages = generate_full_messages(
-                    provider.as_ref(),
+                let (msgs, report) = generate_full_messages(
+                    &providers,
                     &params.system,
                     params.desc_system.as_deref(),
                     &diff,
                     &params.gen_opts,
                 )
                 .await?;
+                print_failover_report(&report);
+                current_messages = msgs;
                 continue;
             }
             Action::Settings => {
                 if settings_menu(&mut session)? {
-                    let params = build_generation_params(&session, &model, timeout, custom_prompt);
+                    let params = build_generation_params(&session, custom_prompt);
                     println!("{} Regenerating with new settings...", "::".dimmed());
-                    current_messages = generate_full_messages(
-                        provider.as_ref(),
+                    let (msgs, report) = generate_full_messages(
+                        &providers,
                         &params.system,
                         params.desc_system.as_deref(),
                         &diff,
                         &params.gen_opts,
                     )
                     .await?;
+                    print_failover_report(&report);
+                    current_messages = msgs;
                 }
                 continue;
             }
@@ -258,8 +257,6 @@ struct GenerationParams {
 
 fn build_generation_params(
     session: &SessionConfig,
-    model: &str,
-    timeout: u64,
     custom_prompt: Option<&str>,
 ) -> GenerationParams {
     let system = prompt::build_system_prompt(
@@ -279,12 +276,13 @@ fn build_generation_params(
         None
     };
 
+    // model and timeout are placeholders — overridden per-provider by failover
     let gen_opts = GenerateOpts {
-        model: model.to_string(),
+        model: String::new(),
         temperature: 0.4,
         max_tokens: 2000,
         completions: session.generate,
-        timeout_secs: timeout,
+        timeout_secs: 0,
     };
 
     GenerationParams {
@@ -294,34 +292,76 @@ fn build_generation_params(
     }
 }
 
+fn print_failover_report(report: &FailoverReport) {
+    if report.failures.is_empty() {
+        println!(
+            "{} Generated with {}",
+            "::".dimmed(),
+            report.used_model.dimmed()
+        );
+    } else {
+        let failure_summary: String = report
+            .failures
+            .iter()
+            .map(|f| format!("{} failed: {}", f.provider, f.reason))
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "{} Generated with {} {}",
+            "::".dimmed(),
+            report.used_model,
+            format!("(fallback: {failure_summary})").dimmed()
+        );
+    }
+}
+
 // --- Subject+Body helpers ---
 
-/// Generate commit messages. When `desc_system` is Some (subject+body mode),
-/// generates subjects first, then a body for each, and combines them.
+/// Generate commit messages with failover. When `desc_system` is Some (subject+body mode),
+/// generates subjects first, then a body for each using the provider that succeeded.
 async fn generate_full_messages(
-    provider: &dyn crate::ai::provider::AiProvider,
+    providers: &[ai::ProviderWithOpts],
     system: &str,
     desc_system: Option<&str>,
     diff: &str,
     opts: &GenerateOpts,
-) -> Result<Vec<String>> {
-    let subjects = generate_messages(provider, system, diff, opts).await?;
+) -> Result<(Vec<String>, FailoverReport)> {
+    let (subjects, report) =
+        generate_messages_with_failover(providers, system, diff, opts).await?;
 
     if subjects.is_empty() {
         bail!("No commit messages were generated. Try again.");
     }
 
     let Some(desc_sys) = desc_system else {
-        return Ok(subjects);
+        return Ok((subjects, report));
     };
 
-    // 2-step: generate body for each subject
+    // 2-step: generate body for each subject, using the provider that succeeded
+    let working = providers
+        .iter()
+        .find(|p| p.provider.name() == report.used_provider)
+        .unwrap_or(&providers[0]);
+
+    let desc_opts = GenerateOpts {
+        model: working.model.clone(),
+        timeout_secs: working.timeout,
+        ..opts.clone()
+    };
+
     let mut full_messages = Vec::with_capacity(subjects.len());
     for subject in &subjects {
-        let body = generate_description(provider, desc_sys, subject, diff, opts).await?;
+        let (body, _) = generate_description_with_failover(
+            std::slice::from_ref(working),
+            desc_sys,
+            subject,
+            diff,
+            &desc_opts,
+        )
+        .await?;
         full_messages.push(combine_subject_body(subject, &body));
     }
-    Ok(full_messages)
+    Ok((full_messages, report))
 }
 
 fn combine_subject_body(subject: &str, body: &str) -> String {
@@ -698,12 +738,10 @@ mod tests {
             max_length: 72,
             generate: 1,
         };
-        let params = build_generation_params(&session, "claude-sonnet", 30, None);
+        let params = build_generation_params(&session, None);
         assert!(params.system.contains("en"));
         assert!(params.desc_system.is_none());
         assert_eq!(params.gen_opts.completions, 1);
-        assert_eq!(params.gen_opts.model, "claude-sonnet");
-        assert_eq!(params.gen_opts.timeout_secs, 30);
     }
 
     #[test]
@@ -714,7 +752,7 @@ mod tests {
             max_length: 90,
             generate: 2,
         };
-        let params = build_generation_params(&session, "gemini-flash", 60, None);
+        let params = build_generation_params(&session, None);
         assert!(params.system.contains("ja"));
         assert!(params.desc_system.is_some());
         assert!(params.desc_system.unwrap().contains("ja"));

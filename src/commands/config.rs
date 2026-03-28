@@ -58,24 +58,46 @@ fn print_config_table(sources: &ConfigWithSources) {
     let default_source = ConfigSource::Default;
     let get = |key: &str| -> &ConfigSource { fs.get(key).unwrap_or(&default_source) };
 
-    let fields: &[(&str, String)] = &[
-        ("provider", config.provider.clone()),
-        ("api_key", mask_api_key(&config.api_key)),
-        ("model", config.model.clone()),
-        ("locale", config.locale.clone()),
-        ("type", config.commit_type.as_str().to_string()),
-        ("max_length", config.max_length.to_string()),
-        ("generate", config.generate.to_string()),
-        ("timeout", config.timeout.to_string()),
+    // provider/api_key/model all share the "providers" source
+    let provider_source = get("providers");
+
+    let fields: &[(&str, String, &ConfigSource)] = &[
+        ("provider", config.provider.clone(), provider_source),
+        ("api_key", mask_api_key(&config.api_key), provider_source),
+        ("model", config.model.clone(), provider_source),
+        ("locale", config.locale.clone(), get("locale")),
+        ("type", config.commit_type.as_str().to_string(), get("type")),
+        ("max_length", config.max_length.to_string(), get("max_length")),
+        ("generate", config.generate.to_string(), get("generate")),
+        ("timeout", config.timeout.to_string(), get("timeout")),
     ];
 
-    for (key, value) in fields {
-        let source = get(key);
+    for (key, value, source) in fields {
         let tag = format!("[{}]", source_tag(source));
         let line = format!("  {:<12} = {:<30} {}", key, value, tag.dimmed());
         match source {
             ConfigSource::Local => println!("{}", line.green()),
             _ => println!("{line}"),
+        }
+    }
+
+    // Show fallback providers if any
+    if !config.fallback_providers.is_empty() {
+        println!();
+        println!("  {}", "Fallback providers:".dimmed());
+        for (i, entry) in config.fallback_providers.iter().enumerate() {
+            let model_display = if entry.model.is_empty() {
+                "(default)".to_string()
+            } else {
+                entry.model.clone()
+            };
+            println!(
+                "    {}. {} (model: {}, key: {})",
+                i + 1,
+                entry.name,
+                model_display,
+                mask_api_key(&entry.api_key),
+            );
         }
     }
 }

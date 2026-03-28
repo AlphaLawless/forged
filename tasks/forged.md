@@ -380,7 +380,7 @@ forged/
 
 ---
 
-### Fase 19 — Multi-Provider com Failover [IN PROGRESS]
+### Fase 19 — Multi-Provider com Failover [DONE]
 
 #### 19a — AiError Enum + Trait Update [DONE]
 - [x] `AiError` enum: `Retryable` (429, timeout, 5xx), `ProviderFatal` (401/403), `Fatal` (parse error)
@@ -399,25 +399,40 @@ forged/
 - [x] `Fatal` propaga imediato, `Retryable`/`ProviderFatal` preserva último erro
 - [x] Mocks em unit tests e integration tests atualizados
 
-#### 19d — Config Multi-Provider [TODO]
-- [ ] `ProviderEntry` struct (name, api_key, model)
-- [ ] `Config.providers: Vec<ProviderEntry>`
-- [ ] Parsing: `providers=claude,gemini` + `api_key_claude=...` + `model_claude=...`
-- [ ] Backwards compat: `provider=claude` single-field continua funcionando
-- [ ] `save_to()`/`save_diff_to()` com formato novo/legado
+#### 19d — Config Multi-Provider [DONE]
+- [x] `ProviderEntry` struct (name, api_key, model)
+- [x] `Config.fallback_providers: Vec<ProviderEntry>` — máx 3 fallbacks (4 total)
+- [x] Formato INI com seções: `[provider.claude]`, `[provider.gemini]`
+- [x] `ParsedIni` struct + `parse_ini_sections()` — parser com suporte a seções
+- [x] `apply_parsed()` — carrega formato novo (`providers=`) e legado (`provider=`)
+- [x] `serialize_parsed()` — sempre serializa com seções
+- [x] `save_to()` / `save_diff_to()` atualizados para formato com seções
+- [x] Backwards compat: leitura do formato legado sem seções funciona
+- [x] Validação: nomes de provider válidos, máx 4 providers
 
-#### 19e — build_providers() + Failover Logic [TODO]
-- [ ] `ProviderWithOpts` struct (provider, model, timeout)
-- [ ] `build_providers(config)` → `Vec<ProviderWithOpts>`
-- [ ] `generate_messages_with_failover()` — tenta providers em ordem
-- [ ] `generate_description_with_failover()`
-- [ ] `FailoverReport` (used_provider, used_model, tried)
+#### 19e — build_providers() + Failover Logic [DONE]
+- [x] `ProviderWithOpts` struct (provider, model, timeout)
+- [x] `FailoverReport` / `FailoverFailure` structs
+- [x] `build_provider_from_entry(name, api_key)` — factory extraída
+- [x] `build_providers(config)` → `Vec<ProviderWithOpts>` (primary + fallbacks)
+- [x] `generate_messages_with_failover()` — tenta providers em ordem, Fatal para imediato
+- [x] `generate_description_with_failover()` — mesma lógica
 
-#### 19f — Commit Flow + UI [TODO]
-- [ ] `commit.rs` usa `build_providers()` + failover functions
-- [ ] Log: `:: Generated with claude-sonnet-4-6 (fallback: gemini failed — rate limit)`
-- [ ] Setup wizard: adicionar fallback provider opcional
-- [ ] `config list/set` com provider-specific keys
+#### 19f — Commit Flow + UI [DONE]
+- [x] `commit.rs` usa `build_providers()` + failover functions
+- [x] `generate_full_messages()` retorna `(Vec<String>, FailoverReport)`
+- [x] Log: `:: Generated with gemini-2.5-flash (fallback: claude failed — rate limit)`
+- [x] `print_failover_report()` — exibe provider usado e falhas
+- [x] model/timeout resolvidos per-provider (não mais globais)
+- [x] Regenerate e Settings usam failover
+- [x] Setup wizard: "Add a fallback provider?" com loop para até 3 fallbacks
+- [x] `run_local()` com fallback providers
+- [x] `config list` mostra fallback providers na tabela
+
+**Testes novos (17):**
+- config.rs: 8 (parse_ini_with_sections, apply_multi_provider, apply_single_provider_backwards_compat, save_roundtrip_multi_provider, save_single_provider_uses_sections, save_diff_multi_provider, max_four_providers_validation, invalid_provider_name_validation)
+- ai/provider.rs: 6 (failover_to_second_on_retryable, failover_report_tracks_failures, fatal_stops_failover, single_provider_no_failover, all_providers_fail, description_failover)
+- ai/mod.rs: 3 (build_providers_single, build_providers_with_fallback, build_providers_fallback_default_model)
 
 ---
 
@@ -425,17 +440,17 @@ forged/
 
 | Módulo | Testes |
 |---|---|
-| config.rs | 24 |
+| config.rs | 32 |
 | git.rs | 12 |
 | prompt.rs | 9 |
 | ai/sanitize.rs | 17 |
-| ai/provider.rs | 5 |
+| ai/provider.rs | 11 |
 | ai/providers/openai_compat.rs | 7 |
 | ai/providers/claude.rs | 6 |
 | ai/providers/gemini.rs | 6 |
 | ai/providers/chatgpt.rs | 6 |
 | ai/providers/openrouter.rs | 5 |
-| ai/mod.rs | 9 |
+| ai/mod.rs | 12 |
 | commands/setup.rs | 11 |
 | commands/commit.rs | 8 |
 | commands/hook.rs | 6 |
@@ -443,7 +458,7 @@ forged/
 | commands/upgrade.rs | 4 |
 | clipboard.rs | 2 |
 | main.rs (CLI) | 4 |
-| **Total unitários** | **145** |
+| **Total unitários** | **162** |
 
 ### Testes de Integração (`tests/`)
 
@@ -456,18 +471,11 @@ forged/
 | tests/git_hook.rs | 6 |
 | **Total integração** | **22** |
 
-| **Total geral** | **167 (todos passando)** |
+| **Total geral** | **184 (todos passando)** |
 
 ---
 
 ## Pendências
-
-### Em progresso
-
-#### Multi-provider com failover (Fase 19d-f)
-- [ ] Config multi-provider (`providers=claude,gemini`, `api_key_<name>=...`)
-- [ ] `build_providers()` + failover logic
-- [ ] Commit flow + UI (log, setup wizard, config commands)
 
 ### Futuro
 

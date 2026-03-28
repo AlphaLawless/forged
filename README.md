@@ -156,17 +156,44 @@ feat: add OAuth2 login flow
 Global config stored at `~/.forged/global`:
 
 ```ini
-provider=gemini
-api_key=AIza...
-model=gemini-2.5-flash
+providers=gemini
 locale=en
 type=conventional
 max_length=72
 generate=1
 timeout=0
+
+[provider.gemini]
+api_key=AIza...
+model=gemini-2.5-flash
 ```
 
 `timeout=0` uses the provider's default (30s for Claude/ChatGPT, 60s for Gemini/OpenRouter).
+
+### Multi-provider failover
+
+Configure multiple providers — if the primary fails (rate limit, timeout, invalid key), forged automatically tries the next one:
+
+```ini
+providers=claude,gemini
+locale=en
+type=conventional
+
+[provider.claude]
+api_key=sk-ant-...
+model=claude-sonnet-4-6-20250514
+
+[provider.gemini]
+api_key=AIza...
+model=gemini-2.5-flash
+```
+
+The setup wizard guides you through adding fallback providers. The order in `providers=` defines priority.
+
+When failover happens, you'll see:
+```
+:: Generated with gemini-2.5-flash (fallback: claude failed — rate limit)
+```
 
 ### Per-repo config
 
@@ -216,10 +243,7 @@ forged config list
 - [x] Per-repo local config (`forged setup local`)
 - [x] Config management UX (interactive config browser, profile reuse, remove local config)
 - [x] Error classification for failover (retryable vs fatal errors)
-
-### In Progress
-
-- [ ] Multi-provider with failover (configure multiple providers, auto-fallback on rate limit/timeout)
+- [x] Multi-provider with failover (configure multiple providers, auto-fallback on rate limit/timeout)
 
 ### Planned
 

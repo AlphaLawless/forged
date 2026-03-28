@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
-use inquire::{Password, PasswordDisplayMode, Select, Text};
+use inquire::{Confirm, Password, PasswordDisplayMode, Select, Text};
 use std::path::PathBuf;
 
-use crate::config::{self, CommitType, Config};
+use crate::config::{self, CommitType, Config, ProviderEntry};
 
 #[derive(Debug, Clone)]
 pub struct ProviderInfo {
@@ -159,6 +159,9 @@ pub fn run(existing: Option<Config>) -> Result<Config> {
         .prompt()?;
     config.locale = locale;
 
+    // 6. Optional fallback providers
+    config.fallback_providers = collect_fallback_providers(&config.provider)?;
+
     // Save
     config.save_global()?;
 
@@ -170,6 +173,69 @@ pub fn run(existing: Option<Config>) -> Result<Config> {
     );
 
     Ok(config)
+}
+
+/// Interactive loop to collect up to 3 fallback providers.
+fn collect_fallback_providers(primary_key: &str) -> Result<Vec<ProviderEntry>> {
+    let mut fallbacks = Vec::new();
+    let max_fallbacks = 3;
+
+    loop {
+        if fallbacks.len() >= max_fallbacks {
+            break;
+        }
+
+        let add = Confirm::new("Add a fallback provider?")
+            .with_default(false)
+            .prompt()?;
+
+        if !add {
+            break;
+        }
+
+        // Filter out primary and already-added providers
+        let used: Vec<&str> = std::iter::once(primary_key)
+            .chain(fallbacks.iter().map(|f: &ProviderEntry| f.name.as_str()))
+            .collect();
+        let remaining: Vec<&str> = PROVIDER_LIST
+            .iter()
+            .filter(|p| !used.contains(&p.key))
+            .map(|p| p.label)
+            .collect();
+
+        if remaining.is_empty() {
+            println!("{}", "  All providers already configured.".dimmed());
+            break;
+        }
+
+        let label = Select::new("Fallback provider:", remaining)
+            .with_page_size(10)
+            .prompt()?;
+        let info = find_provider_by_label(label).expect("label must match");
+
+        let api_key = Password::new(&format!("API key for {}:", info.label))
+            .with_display_mode(PasswordDisplayMode::Masked)
+            .without_confirmation()
+            .prompt()?;
+
+        let model = if !info.models.is_empty() {
+            let models: Vec<&str> = info.models.to_vec();
+            Select::new("Model:", models)
+                .with_page_size(10)
+                .prompt()?
+                .to_string()
+        } else {
+            String::new()
+        };
+
+        fallbacks.push(ProviderEntry {
+            name: info.key.into(),
+            api_key,
+            model,
+        });
+    }
+
+    Ok(fallbacks)
 }
 
 /// Run the interactive local setup wizard (per-repo overrides).
@@ -256,6 +322,9 @@ pub fn run_local() -> Result<Config> {
         .with_help_message("e.g. en, pt-br, ja, es")
         .prompt()?;
     config.locale = locale;
+
+    // 6. Optional fallback providers
+    config.fallback_providers = collect_fallback_providers(&config.provider)?;
 
     // Save only fields that differ from global
     config.save_local(&profile)?;

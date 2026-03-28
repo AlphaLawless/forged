@@ -1,6 +1,8 @@
-use anyhow::Result;
 use async_trait::async_trait;
 
+use super::FailoverFailure;
+use super::FailoverReport;
+use super::ProviderWithOpts;
 use super::sanitize;
 
 /// Error types for AI provider operations, classified for failover decisions.
@@ -115,6 +117,101 @@ pub async fn generate_messages(
     }
 
     Ok(sanitize::deduplicate(messages))
+}
+
+/// Generate messages with failover across multiple providers.
+/// Tries providers in order; on Retryable/ProviderFatal, moves to next.
+/// Fatal errors stop immediately.
+pub async fn generate_messages_with_failover(
+    providers: &[ProviderWithOpts],
+    system: &str,
+    user: &str,
+    base_opts: &GenerateOpts,
+) -> Result<(Vec<String>, FailoverReport), AiError> {
+    let mut failures = Vec::new();
+
+    for pw in providers {
+        let opts = GenerateOpts {
+            model: pw.model.clone(),
+            timeout_secs: pw.timeout,
+            ..base_opts.clone()
+        };
+        match generate_messages(pw.provider.as_ref(), system, user, &opts).await {
+            Ok(messages) => {
+                return Ok((
+                    messages,
+                    FailoverReport {
+                        used_provider: pw.provider.name().to_string(),
+                        used_model: pw.model.clone(),
+                        failures,
+                    },
+                ));
+            }
+            Err(e) if e.should_failover() => {
+                failures.push(FailoverFailure {
+                    provider: pw.provider.name().to_string(),
+                    reason: e.to_string(),
+                });
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(AiError::Fatal(format!(
+        "All providers failed. {}",
+        failures
+            .iter()
+            .map(|f| format!("{}: {}", f.provider, f.reason))
+            .collect::<Vec<_>>()
+            .join("; ")
+    )))
+}
+
+/// Generate a description with failover across multiple providers.
+pub async fn generate_description_with_failover(
+    providers: &[ProviderWithOpts],
+    system: &str,
+    subject: &str,
+    diff: &str,
+    base_opts: &GenerateOpts,
+) -> Result<(String, FailoverReport), AiError> {
+    let mut failures = Vec::new();
+
+    for pw in providers {
+        let opts = GenerateOpts {
+            model: pw.model.clone(),
+            timeout_secs: pw.timeout,
+            ..base_opts.clone()
+        };
+        match generate_description(pw.provider.as_ref(), system, subject, diff, &opts).await {
+            Ok(desc) => {
+                return Ok((
+                    desc,
+                    FailoverReport {
+                        used_provider: pw.provider.name().to_string(),
+                        used_model: pw.model.clone(),
+                        failures,
+                    },
+                ));
+            }
+            Err(e) if e.should_failover() => {
+                failures.push(FailoverFailure {
+                    provider: pw.provider.name().to_string(),
+                    reason: e.to_string(),
+                });
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(AiError::Fatal(format!(
+        "All providers failed. {}",
+        failures
+            .iter()
+            .map(|f| format!("{}: {}", f.provider, f.reason))
+            .collect::<Vec<_>>()
+            .join("; ")
+    )))
 }
 
 #[cfg(test)]
@@ -278,5 +375,196 @@ mod tests {
         assert_eq!(captured.len(), 1);
         assert!(captured[0].contains("Title: feat: add login"));
         assert!(captured[0].contains("Diff:\ndiff here"));
+    }
+
+    // --- Failover tests ---
+
+    #[derive(Debug)]
+    struct FailingProvider {
+        name: String,
+        error: AiError,
+    }
+
+    #[async_trait]
+    impl AiProvider for FailingProvider {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn default_model(&self) -> &str {
+            "fail-model"
+        }
+        async fn complete(
+            &self,
+            _system: &str,
+            _user: &str,
+            _opts: &GenerateOpts,
+        ) -> Result<String, AiError> {
+            Err(match &self.error {
+                AiError::Retryable(m) => AiError::Retryable(m.clone()),
+                AiError::ProviderFatal(m) => AiError::ProviderFatal(m.clone()),
+                AiError::Fatal(m) => AiError::Fatal(m.clone()),
+            })
+        }
+    }
+
+    fn make_pw(provider: Box<dyn AiProvider>) -> ProviderWithOpts {
+        let model = provider.default_model().to_string();
+        ProviderWithOpts {
+            provider,
+            model,
+            timeout: 10,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_failover_to_second_on_retryable() {
+        let providers = vec![
+            make_pw(Box::new(FailingProvider {
+                name: "fail1".into(),
+                error: AiError::Retryable("rate limit".into()),
+            })),
+            make_pw(Box::new(MockProvider {
+                responses: vec!["feat: success".into()],
+            })),
+        ];
+        let (msgs, report) = generate_messages_with_failover(
+            &providers,
+            "sys",
+            "diff",
+            &test_opts(1),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(msgs[0], "feat: success");
+        assert_eq!(report.used_provider, "mock");
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].provider, "fail1");
+    }
+
+    #[tokio::test]
+    async fn test_failover_report_tracks_failures() {
+        let providers = vec![
+            make_pw(Box::new(FailingProvider {
+                name: "p1".into(),
+                error: AiError::Retryable("timeout".into()),
+            })),
+            make_pw(Box::new(FailingProvider {
+                name: "p2".into(),
+                error: AiError::ProviderFatal("invalid key".into()),
+            })),
+            make_pw(Box::new(MockProvider {
+                responses: vec!["fix: it works".into()],
+            })),
+        ];
+        let (_, report) = generate_messages_with_failover(
+            &providers,
+            "sys",
+            "diff",
+            &test_opts(1),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(report.failures.len(), 2);
+        assert_eq!(report.failures[0].provider, "p1");
+        assert!(report.failures[0].reason.contains("timeout"));
+        assert_eq!(report.failures[1].provider, "p2");
+        assert!(report.failures[1].reason.contains("invalid key"));
+    }
+
+    #[tokio::test]
+    async fn test_fatal_stops_failover() {
+        let providers = vec![
+            make_pw(Box::new(FailingProvider {
+                name: "fatal".into(),
+                error: AiError::Fatal("parse error".into()),
+            })),
+            make_pw(Box::new(MockProvider {
+                responses: vec!["should not reach".into()],
+            })),
+        ];
+        let err = generate_messages_with_failover(
+            &providers,
+            "sys",
+            "diff",
+            &test_opts(1),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, AiError::Fatal(_)));
+        assert!(err.to_string().contains("parse error"));
+    }
+
+    #[tokio::test]
+    async fn test_single_provider_no_failover() {
+        let providers = vec![make_pw(Box::new(MockProvider {
+            responses: vec!["feat: single".into()],
+        }))];
+        let (msgs, report) = generate_messages_with_failover(
+            &providers,
+            "sys",
+            "diff",
+            &test_opts(1),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(msgs[0], "feat: single");
+        assert!(report.failures.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_all_providers_fail() {
+        let providers = vec![
+            make_pw(Box::new(FailingProvider {
+                name: "p1".into(),
+                error: AiError::Retryable("timeout".into()),
+            })),
+            make_pw(Box::new(FailingProvider {
+                name: "p2".into(),
+                error: AiError::ProviderFatal("bad key".into()),
+            })),
+        ];
+        let err = generate_messages_with_failover(
+            &providers,
+            "sys",
+            "diff",
+            &test_opts(1),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(err, AiError::Fatal(_)));
+        assert!(err.to_string().contains("All providers failed"));
+        assert!(err.to_string().contains("p1"));
+        assert!(err.to_string().contains("p2"));
+    }
+
+    #[tokio::test]
+    async fn test_description_failover() {
+        let providers = vec![
+            make_pw(Box::new(FailingProvider {
+                name: "fail".into(),
+                error: AiError::Retryable("429".into()),
+            })),
+            make_pw(Box::new(MockProvider {
+                responses: vec!["- Change description".into()],
+            })),
+        ];
+        let (desc, report) = generate_description_with_failover(
+            &providers,
+            "sys",
+            "feat: add auth",
+            "diff",
+            &test_opts(1),
+        )
+        .await
+        .unwrap();
+
+        assert!(desc.contains("Change description"));
+        assert_eq!(report.used_provider, "mock");
+        assert_eq!(report.failures.len(), 1);
     }
 }
