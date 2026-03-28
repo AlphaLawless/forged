@@ -2,17 +2,15 @@ use crate::config::Config;
 use anyhow::Result;
 
 pub fn run_set(key: &str, value: &str) -> Result<()> {
-    let path = config_path()?;
-    let mut config = Config::load_from(&path)?;
+    let mut config = Config::load_global()?;
     config.set(key, value)?;
-    config.save_to(&path)?;
+    config.save_global()?;
     println!("Set {key}={value}");
     Ok(())
 }
 
 pub fn run_get(key: &str) -> Result<()> {
-    let path = config_path()?;
-    let config = Config::load_from(&path)?;
+    let config = Config::load()?;
     let value = match key {
         "provider" => config.provider.clone(),
         "api_key" => {
@@ -37,8 +35,11 @@ pub fn run_get(key: &str) -> Result<()> {
 }
 
 pub fn run_list() -> Result<()> {
-    let path = config_path()?;
-    let config = Config::load_from(&path)?;
+    let (config, profile) = Config::load_with_source()?;
+
+    if let Some(ref name) = profile {
+        println!("# profile: {name}");
+    }
 
     println!("provider={}", config.provider);
     println!(
@@ -57,12 +58,6 @@ pub fn run_list() -> Result<()> {
     println!("generate={}", config.generate);
     println!("timeout={}", config.timeout);
     Ok(())
-}
-
-fn config_path() -> Result<std::path::PathBuf> {
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-    Ok(home.join(".forged"))
 }
 
 #[cfg(test)]

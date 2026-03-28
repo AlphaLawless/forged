@@ -41,7 +41,11 @@ impl OpenAiCompatProvider {
     }
 
     /// Create with a custom base URL (used for testing with mockito).
-    pub fn with_base_url(api_key: String, base_url: String, mut config: OpenAiCompatConfig) -> Self {
+    pub fn with_base_url(
+        api_key: String,
+        base_url: String,
+        mut config: OpenAiCompatConfig,
+    ) -> Self {
         config.base_url = base_url;
         Self {
             config,
@@ -159,7 +163,10 @@ impl AiProvider for OpenAiCompatProvider {
         let status = response.status();
 
         if self.config.invalid_key_statuses.contains(&status.as_u16()) {
-            bail!("Invalid API key. Check your {} API key and try again.", provider_name);
+            bail!(
+                "Invalid API key. Check your {} API key and try again.",
+                provider_name
+            );
         }
 
         if status == 429 {
@@ -174,7 +181,12 @@ impl AiProvider for OpenAiCompatProvider {
             {
                 bail!("{} API error ({}): {}", provider_name, status.as_u16(), msg);
             }
-            bail!("{} API error ({}): {}", provider_name, status.as_u16(), body_text);
+            bail!(
+                "{} API error ({}): {}",
+                provider_name,
+                status.as_u16(),
+                body_text
+            );
         }
 
         let api_response: ApiResponse = response
@@ -251,7 +263,10 @@ mod tests {
 
         let provider =
             OpenAiCompatProvider::with_base_url("key".into(), server.url(), test_config());
-        let result = provider.complete("sys", "diff", &test_opts()).await.unwrap();
+        let result = provider
+            .complete("sys", "diff", &test_opts())
+            .await
+            .unwrap();
         assert_eq!(result, "feat: add auth");
     }
 
@@ -316,8 +331,7 @@ mod tests {
 
         let mut config = test_config();
         config.invalid_key_statuses = &[401, 403];
-        let provider =
-            OpenAiCompatProvider::with_base_url("key".into(), server.url(), config);
+        let provider = OpenAiCompatProvider::with_base_url("key".into(), server.url(), config);
         let err = provider
             .complete("sys", "diff", &test_opts())
             .await
@@ -361,8 +375,7 @@ mod tests {
             ("http-referer", "https://example.com".into()),
             ("x-custom", "custom-value".into()),
         ];
-        let provider =
-            OpenAiCompatProvider::with_base_url("key".into(), server.url(), config);
+        let provider = OpenAiCompatProvider::with_base_url("key".into(), server.url(), config);
         let _ = provider.complete("sys", "diff", &test_opts()).await;
         mock.assert_async().await;
     }

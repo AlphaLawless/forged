@@ -8,9 +8,10 @@ fn openrouter_config() -> OpenAiCompatConfig {
         default_model: "anthropic/claude-sonnet-4-6",
         default_timeout: 60,
         base_url: DEFAULT_BASE_URL.into(),
-        extra_headers: vec![
-            ("http-referer", "https://github.com/SrVariable/forged".into()),
-        ],
+        extra_headers: vec![(
+            "http-referer",
+            "https://github.com/SrVariable/forged".into(),
+        )],
         invalid_key_statuses: &[401, 403],
     }
 }

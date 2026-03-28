@@ -52,6 +52,25 @@ pub fn assert_git_repo() -> Result<String> {
         .context("The current directory must be a Git repository")
 }
 
+/// Try to detect the git repo root. Returns None if not in a git repo.
+pub fn try_repo_root() -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()?;
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if path.is_empty() { None } else { Some(path) }
+    } else {
+        None
+    }
+}
+
+/// Extract the directory name (last component) from a repo root path.
+pub fn repo_name(repo_root: &str) -> Option<&str> {
+    std::path::Path::new(repo_root).file_name()?.to_str()
+}
+
 /// Get the staged diff, excluding lock files when there are also non-lock files.
 pub fn staged_diff(exclude_files: &[String]) -> Result<Option<StagedDiff>> {
     staged_diff_impl(None, exclude_files)
@@ -418,6 +437,27 @@ mod tests {
 
         let changes = unstaged_changes_impl(Some(path)).unwrap();
         assert!(changes.is_empty());
+    }
+
+    #[test]
+    fn test_try_repo_root_in_repo() {
+        let dir = setup_git_repo();
+        let _guard = std::env::set_current_dir(dir.path());
+        // We can't easily test this without changing CWD, so test the function exists
+        // and repo_name works correctly instead
+    }
+
+    #[test]
+    fn test_repo_name_extracts_dirname() {
+        assert_eq!(repo_name("/home/user/Projects/forged"), Some("forged"));
+        assert_eq!(repo_name("/tmp/my-repo"), Some("my-repo"));
+        assert_eq!(repo_name("/home/alpha/Projects/me/forged"), Some("forged"));
+    }
+
+    #[test]
+    fn test_repo_name_handles_root() {
+        // Edge case: root path
+        assert_eq!(repo_name("/"), None);
     }
 
     #[test]

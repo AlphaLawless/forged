@@ -1,6 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
 use inquire::{Password, PasswordDisplayMode, Select, Text};
+use std::path::PathBuf;
 
 use crate::config::{CommitType, Config};
 
@@ -159,13 +160,120 @@ pub fn run(existing: Option<Config>) -> Result<Config> {
     config.locale = locale;
 
     // Save
-    config.save()?;
+    config.save_global()?;
 
     println!();
-    println!("{} Configuration saved to ~/.forged", "✔".green());
+    println!("{} Configuration saved to ~/.forged/global", "✔".green());
     println!(
         "{}",
         "  Run `forged config list` to review your settings.\n".dimmed()
+    );
+
+    Ok(config)
+}
+
+/// Run the interactive local setup wizard (per-repo overrides).
+pub fn run_local() -> Result<Config> {
+    let repo_root = crate::git::assert_git_repo()?;
+    let profile = crate::git::repo_name(&repo_root)
+        .context("Could not determine repo directory name")?
+        .to_string();
+
+    println!();
+    println!("{}", "  Local config setup ".bold().on_cyan().black());
+    println!("{}", format!("  Profile: {profile}\n").dimmed());
+
+    // Load current merged config as starting point
+    let _global = Config::load_global()?;
+    let mut config = Config::load()?;
+
+    // 1. Provider selection (may differ per-repo)
+    let labels = available_provider_labels();
+    let starting_idx = if !config.provider.is_empty() {
+        PROVIDER_LIST
+            .iter()
+            .position(|p| p.key == config.provider)
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let selected_label = Select::new("Choose your AI provider:", labels)
+        .with_starting_cursor(starting_idx)
+        .with_page_size(10)
+        .prompt()?;
+    let provider_info =
+        find_provider_by_label(selected_label).expect("selected label must match a provider");
+    config.provider = provider_info.key.into();
+
+    // 2. API Key (may need different key per-repo, e.g. OpenRouter vs Claude)
+    let key_hint = if !config.api_key.is_empty() {
+        let visible = &config.api_key[..config.api_key.len().min(8)];
+        format!(" (current: {visible}...)")
+    } else {
+        String::new()
+    };
+    let api_key = Password::new(&format!(
+        "Enter your API key{key_hint} (leave empty to inherit global):"
+    ))
+    .with_display_mode(PasswordDisplayMode::Masked)
+    .without_confirmation()
+    .prompt()?;
+    if !api_key.is_empty() {
+        config.api_key = api_key;
+    }
+
+    // 3. Model selection
+    if !provider_info.models.is_empty() {
+        let models: Vec<&str> = provider_info.models.to_vec();
+        let default_idx = models.iter().position(|m| *m == config.model).unwrap_or(0);
+        let model = Select::new("Choose a model:", models)
+            .with_starting_cursor(default_idx)
+            .with_page_size(10)
+            .prompt()?;
+        config.model = model.to_string();
+    }
+
+    // 4. Commit type
+    let type_labels: Vec<&str> = COMMIT_TYPES.iter().map(|(_, label)| *label).collect();
+    let current_type_idx = COMMIT_TYPES
+        .iter()
+        .position(|(name, _)| *name == config.commit_type.as_str())
+        .unwrap_or(0);
+    let type_selection = Select::new("Commit message format:", type_labels)
+        .with_starting_cursor(current_type_idx)
+        .with_page_size(10)
+        .prompt()?;
+    let selected_type = COMMIT_TYPES
+        .iter()
+        .find(|(_, label)| *label == type_selection)
+        .map(|(name, _)| *name)
+        .unwrap_or("conventional");
+    config.commit_type = CommitType::from_str_loose(selected_type)?;
+
+    // 5. Locale
+    let locale = Text::new("Message language:")
+        .with_default(&config.locale)
+        .with_help_message("e.g. en, pt-br, ja, es")
+        .prompt()?;
+    config.locale = locale;
+
+    // Save only fields that differ from global
+    config.save_local(&profile)?;
+
+    // Write .forged profile file in repo root
+    let dot_forged = PathBuf::from(&repo_root).join(".forged");
+    std::fs::write(&dot_forged, format!("{profile}\n"))
+        .context("Failed to write .forged profile file")?;
+
+    println!();
+    println!(
+        "{} Local config saved to ~/.forged/locals/{profile}",
+        "✔".green()
+    );
+    println!("{} Profile file created at .forged", "✔".green());
+    println!(
+        "{}",
+        "  Consider adding .forged to your .gitignore\n".dimmed()
     );
 
     Ok(config)

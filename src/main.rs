@@ -56,7 +56,10 @@ enum Commands {
         action: ConfigAction,
     },
     /// Run the interactive setup wizard
-    Setup,
+    Setup {
+        #[command(subcommand)]
+        scope: Option<SetupScope>,
+    },
     /// Manage git hook integration
     Hook {
         #[command(subcommand)]
@@ -81,6 +84,12 @@ enum HookAction {
 }
 
 #[derive(Subcommand)]
+enum SetupScope {
+    /// Set up a local (per-repo) configuration profile
+    Local,
+}
+
+#[derive(Subcommand)]
 enum ConfigAction {
     /// Set a config value
     Set { key: String, value: String },
@@ -100,10 +109,13 @@ async fn main() {
             ConfigAction::Get { key } => commands::config::run_get(&key),
             ConfigAction::List => commands::config::run_list(),
         },
-        Some(Commands::Setup) => {
-            let existing = config::Config::load().ok();
-            commands::setup::run(existing).map(|_| ())
-        }
+        Some(Commands::Setup { scope }) => match scope {
+            None => {
+                let existing = config::Config::load_global().ok();
+                commands::setup::run(existing).map(|_| ())
+            }
+            Some(SetupScope::Local) => commands::setup::run_local().map(|_| ()),
+        },
         Some(Commands::Hook { action }) => match action {
             HookAction::Install { force } => commands::hook::install(force),
             HookAction::Uninstall { force } => commands::hook::uninstall(force),

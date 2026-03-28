@@ -34,8 +34,12 @@ pub fn build_provider(config: &Config) -> Result<Box<dyn AiProvider>> {
             }
             Ok(Box::new(providers::openrouter::new(config.api_key.clone())))
         }
-        "" => bail!("No provider configured. Run `forged config set provider <claude|gemini|chatgpt|openrouter>`"),
-        other => bail!("Unknown provider: '{other}'. Available: claude, gemini, chatgpt, openrouter"),
+        "" => bail!(
+            "No provider configured. Run `forged config set provider <claude|gemini|chatgpt|openrouter>`"
+        ),
+        other => {
+            bail!("Unknown provider: '{other}'. Available: claude, gemini, chatgpt, openrouter")
+        }
     }
 }
 
