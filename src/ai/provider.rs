@@ -427,14 +427,10 @@ mod tests {
                 responses: vec!["feat: success".into()],
             })),
         ];
-        let (msgs, report) = generate_messages_with_failover(
-            &providers,
-            "sys",
-            "diff",
-            &test_opts(1),
-        )
-        .await
-        .unwrap();
+        let (msgs, report) =
+            generate_messages_with_failover(&providers, "sys", "diff", &test_opts(1))
+                .await
+                .unwrap();
 
         assert_eq!(msgs[0], "feat: success");
         assert_eq!(report.used_provider, "mock");
@@ -457,14 +453,9 @@ mod tests {
                 responses: vec!["fix: it works".into()],
             })),
         ];
-        let (_, report) = generate_messages_with_failover(
-            &providers,
-            "sys",
-            "diff",
-            &test_opts(1),
-        )
-        .await
-        .unwrap();
+        let (_, report) = generate_messages_with_failover(&providers, "sys", "diff", &test_opts(1))
+            .await
+            .unwrap();
 
         assert_eq!(report.failures.len(), 2);
         assert_eq!(report.failures[0].provider, "p1");
@@ -484,14 +475,9 @@ mod tests {
                 responses: vec!["should not reach".into()],
             })),
         ];
-        let err = generate_messages_with_failover(
-            &providers,
-            "sys",
-            "diff",
-            &test_opts(1),
-        )
-        .await
-        .unwrap_err();
+        let err = generate_messages_with_failover(&providers, "sys", "diff", &test_opts(1))
+            .await
+            .unwrap_err();
 
         assert!(matches!(err, AiError::Fatal(_)));
         assert!(err.to_string().contains("parse error"));
@@ -502,14 +488,10 @@ mod tests {
         let providers = vec![make_pw(Box::new(MockProvider {
             responses: vec!["feat: single".into()],
         }))];
-        let (msgs, report) = generate_messages_with_failover(
-            &providers,
-            "sys",
-            "diff",
-            &test_opts(1),
-        )
-        .await
-        .unwrap();
+        let (msgs, report) =
+            generate_messages_with_failover(&providers, "sys", "diff", &test_opts(1))
+                .await
+                .unwrap();
 
         assert_eq!(msgs[0], "feat: single");
         assert!(report.failures.is_empty());
@@ -527,14 +509,9 @@ mod tests {
                 error: AiError::ProviderFatal("bad key".into()),
             })),
         ];
-        let err = generate_messages_with_failover(
-            &providers,
-            "sys",
-            "diff",
-            &test_opts(1),
-        )
-        .await
-        .unwrap_err();
+        let err = generate_messages_with_failover(&providers, "sys", "diff", &test_opts(1))
+            .await
+            .unwrap_err();
 
         assert!(matches!(err, AiError::Fatal(_)));
         assert!(err.to_string().contains("All providers failed"));

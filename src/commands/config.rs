@@ -67,7 +67,11 @@ fn print_config_table(sources: &ConfigWithSources) {
         ("model", config.model.clone(), provider_source),
         ("locale", config.locale.clone(), get("locale")),
         ("type", config.commit_type.as_str().to_string(), get("type")),
-        ("max_length", config.max_length.to_string(), get("max_length")),
+        (
+            "max_length",
+            config.max_length.to_string(),
+            get("max_length"),
+        ),
         ("generate", config.generate.to_string(), get("generate")),
         ("timeout", config.timeout.to_string(), get("timeout")),
     ];
@@ -123,11 +127,7 @@ pub fn run_list() -> Result<()> {
         clear_screen();
 
         // Build options: Global + all local profiles
-        let mut options = vec![format!(
-            "{} ({})",
-            GLOBAL_PREFIX,
-            global_path.display()
-        )];
+        let mut options = vec![format!("{} ({})", GLOBAL_PREFIX, global_path.display())];
         for name in &profiles {
             if let Ok(lp) = config::local_config_path(name) {
                 options.push(format!("{name} ({lp})", lp = lp.display()));
@@ -155,11 +155,7 @@ pub fn run_list() -> Result<()> {
             let local_path = config::local_config_path(profile)?;
             let sources =
                 Config::load_with_sources_at(&global_path, Some(&local_path), Some(profile))?;
-            println!(
-                "  {} {}",
-                "Profile:".bold(),
-                profile.green().bold()
-            );
+            println!("  {} {}", "Profile:".bold(), profile.green().bold());
             println!("  {}", local_path.display().to_string().dimmed());
             println!();
             print_config_table(&sources);

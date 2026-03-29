@@ -520,16 +520,26 @@ impl Config {
 
         if let Some(providers_str) = parsed.global.get("providers") {
             // New multi-provider format
-            let names: Vec<&str> = providers_str.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            let names: Vec<&str> = providers_str
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
             if names.is_empty() {
                 bail!("'providers' cannot be empty");
             }
             if names.len() > MAX_PROVIDERS {
-                bail!("Maximum of {MAX_PROVIDERS} providers allowed, got {}", names.len());
+                bail!(
+                    "Maximum of {MAX_PROVIDERS} providers allowed, got {}",
+                    names.len()
+                );
             }
             for name in &names {
                 if !VALID_PROVIDER_NAMES.contains(name) {
-                    bail!("Unknown provider: '{name}'. Available: {}", VALID_PROVIDER_NAMES.join(", "));
+                    bail!(
+                        "Unknown provider: '{name}'. Available: {}",
+                        VALID_PROVIDER_NAMES.join(", ")
+                    );
                 }
             }
 
@@ -1138,7 +1148,11 @@ mod tests {
         ensure_config_dir_at(&base).unwrap();
 
         let global_path = base.join("global");
-        fs::write(&global_path, "provider=claude\napi_key=sk-test\nmodel=claude-sonnet-4-6\n").unwrap();
+        fs::write(
+            &global_path,
+            "provider=claude\napi_key=sk-test\nmodel=claude-sonnet-4-6\n",
+        )
+        .unwrap();
 
         let result = Config::load_with_sources_at(&global_path, None, None).unwrap();
 
@@ -1158,7 +1172,11 @@ mod tests {
         ensure_config_dir_at(&base).unwrap();
 
         let global_path = base.join("global");
-        fs::write(&global_path, "provider=claude\napi_key=sk-test\nlocale=en\n").unwrap();
+        fs::write(
+            &global_path,
+            "provider=claude\napi_key=sk-test\nlocale=en\n",
+        )
+        .unwrap();
 
         let local_path = base.join("locals").join("myrepo");
         fs::write(&local_path, "locale=pt-br\ntype=conventional\n").unwrap();

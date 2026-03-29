@@ -326,8 +326,7 @@ async fn generate_full_messages(
     diff: &str,
     opts: &GenerateOpts,
 ) -> Result<(Vec<String>, FailoverReport)> {
-    let (subjects, report) =
-        generate_messages_with_failover(providers, system, diff, opts).await?;
+    let (subjects, report) = generate_messages_with_failover(providers, system, diff, opts).await?;
 
     if subjects.is_empty() {
         bail!("No commit messages were generated. Try again.");

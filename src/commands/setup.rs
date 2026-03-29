@@ -440,11 +440,9 @@ pub fn use_profile(name: Option<&str>) -> Result<()> {
             }
             n.to_string()
         }
-        None => {
-            Select::new("Choose a profile to use:", profiles)
-                .with_page_size(10)
-                .prompt()?
-        }
+        None => Select::new("Choose a profile to use:", profiles)
+            .with_page_size(10)
+            .prompt()?,
     };
 
     // Write .forged pointer in repo root
