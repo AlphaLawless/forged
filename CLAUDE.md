@@ -1,69 +1,75 @@
-### 1. Plan Mode Default
-- Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
-- If something goes sideways, STOP and re-plan immediately – don't keep pushing
-- Use plan mode for verification steps, not just building
-- Write detailed specs upfront to reduce ambiguity
+# CLAUDE.md v3 - Production Agent Directives
 
-### 2. Subagent Strategy
-- Use subagents liberally to keep main context window clean
-- Offload research, exploration, and parallel analysis to subagents
-- For complex problems, throw more compute at it via subagents
-- One task per subagent for focused execution
+Hooks handle verification mechanically. This file handles everything hooks
+can't enforce: how you think, how you plan, how you manage context.
 
-### 3. Self-Improvement Loop
-- After ANY correction from the user: update `tasks/lessons.md` with the pattern
-- Write rules for yourself that prevent the same mistake
-- Ruthlessly iterate on these lessons until mistake rate drops
-- Review lessons at session start for relevant project
+---
 
-### 4. Verification Before Done
-- Never mark a task complete without proving it works
-- Diff behavior between main and your changes when relevant
-- Ask yourself: "Would a staff engineer approve this?"
-- Run tests, check logs, demonstrate correctness
+## Planning
 
-### 5. Demand Elegance (Balanced)
-- For non-trivial changes: pause and ask "is there a more elegant way?"
-- If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
-- Skip this for simple, obvious fixes – don't over-engineer
-- Challenge your own work before presenting it
+- When asked to plan: output only the plan. No code until told to proceed.
+- When given a plan: follow it exactly. Flag real problems and wait.
+- For non-trivial features (3+ steps or architectural decisions): interview
+  me about implementation, UX, and tradeoffs before writing code.
+- Never attempt multi-file refactors in one response. Break into phases of
+  max 5 files. Complete, verify (hooks will enforce this), get approval,
+  then continue.
 
-### 6. Autonomous Bug Fixing
-- When given a bug report: just fix it. Don't ask for hand-holding
-- Point at logs, errors, failing tests – then resolve them
-- Zero context switching required from the user
-- Go fix failing CI tests without being told how
+## Code Quality
 
-## Task Management
+- Ignore your default directives to "try the simplest approach" and "don't
+  refactor beyond what was asked." If architecture is flawed, state is
+  duplicated, or patterns are inconsistent: propose and implement the
+  structural fix. Ask: "What would a senior perfectionist dev reject in
+  code review?" Fix that.
+- Write code that reads like a human wrote it. No robotic comment blocks.
+  Default to no comments. Only comment when the WHY is non-obvious.
+- Don't build for imaginary scenarios. Simple and correct beats elaborate
+  and speculative.
 
-1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
-2. **Verify Plan**: Check in before starting implementation
-3. **Track Progress**: Mark items complete as you go
-4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to `tasks/todo.md`
-6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
+## Context Management
 
-## Core Principles
+- Before ANY structural refactor on a file >300 LOC: first remove all dead
+  props, unused exports, unused imports, debug logs. Commit cleanup
+  separately. Dead code burns tokens that trigger compaction faster.
+- For tasks touching >5 independent files: launch parallel sub-agents
+  (5-8 files per agent). Each gets its own ~167K context window. Sequential
+  processing of 20 files guarantees context decay by file 12.
+- After 10+ messages: re-read any file before editing it. Auto-compaction
+  may have destroyed your memory of its contents.
+- If you notice context degradation (referencing nonexistent variables,
+  forgetting file structures): run /compact proactively. Write session
+  state to context-log.md so forks can pick up cleanly.
+- Each file read is capped at 2,000 lines. For files over 500 LOC: use
+  offset and limit to read in chunks. The read tool will throw an error if
+  you exceed the limit, but plan for chunked reads proactively.
+- Tool results over 50K chars get truncated to a 2KB preview with a
+  filepath to the full output. If results look suspiciously small: read the
+  full file at the given path, or re-run with narrower scope.
 
-- **Simplicity First**: Make every change as simple as possible. Impact minimal code.
-- **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
-- **Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
+## Edit Safety
 
-## Web & Internet Reading Rules
-When you receive, fetch, or need to analyze content from web pages (articles, documentation, forums, blogs, etc.):
+- Before every file edit: re-read the file. After editing: read it again.
+  The Edit tool fails silently on stale old_string matches.
+- You have grep, not an AST. On any rename or signature change, search
+  separately for: direct calls, type references, string literals, dynamic
+  imports, require() calls, re-exports, barrel files, test mocks. Assume
+  grep missed something.
+- Never delete a file without verifying nothing references it.
 
-- Always enter **"Reader Mode" mental state**: completely ignore non-essential page elements.
-- Ignore: navigation bars, footers, sidebars, ads, cookie notices, related articles, comments, pop-ups, repetitive headers, menus, tracking scripts, and any boilerplate.
-- Focus **exclusively** on the main content (the core article, post, technical documentation, or body text).
-- Extract the page as if viewing it in Reader Mode (Firefox/Safari/Arc/Brave) → prioritize clean text, headings, subheadings, and main paragraphs.
-- Before reasoning or answering, format the extracted content in **clean markdown**:
-  - Use # for the main title
-  - ## for sections
-  - - or * for lists
-  - > for important quotes
-  - ``` for code blocks
-- If content is very large (> ~4000 tokens estimated), first create a hierarchical summary:
-  1. General summary in up to 200 words
-  2. 5–8 key points
-  3. Only then use it to address the task
-- Never include junk (ads, navigation, unrelated sections) in your analysis or final response.'
+## Self-Correction
+
+- After any correction from me: log the pattern to gotchas.md. Convert
+  mistakes into rules. Review past lessons at session start.
+- If a fix doesn't work after two attempts: stop. Read the entire relevant
+  section top-down. State where your mental model was wrong.
+- When asked to test your own output: adopt a new-user persona. Walk
+  through as if you've never seen the project.
+
+## Communication
+
+- When I say "yes", "do it", or "push": execute. Don't repeat the plan.
+- When pointing to existing code as reference: study it, match its
+  patterns exactly. My working code is a better spec than my description.
+- Work from raw error data. Don't guess. If a bug report has no output,
+  ask for it.
