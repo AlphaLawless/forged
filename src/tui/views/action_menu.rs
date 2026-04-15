@@ -60,13 +60,10 @@ pub fn render<T: Clone>(frame: &mut Frame, area: Rect, state: &ActionMenuState<T
     );
 
     // Prompt label
-    let [_, label_area] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
-        .areas(prompt_area);
+    let [_, label_area] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(prompt_area);
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            "  What do you want to do?",
-            theme::dim(),
-        )),
+        Paragraph::new(Span::styled("  What do you want to do?", theme::dim())),
         label_area,
     );
 

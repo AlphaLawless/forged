@@ -123,10 +123,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &TextInputState) {
 
     // Label
     frame.render_widget(
-        Paragraph::new(Span::styled(
-            format!("  {}", state.label),
-            theme::dim(),
-        )),
+        Paragraph::new(Span::styled(format!("  {}", state.label), theme::dim())),
         label_area,
     );
 
@@ -148,9 +145,7 @@ pub fn render(frame: &mut Frame, area: Rect, state: &TextInputState) {
         String::new()
     };
 
-    let cursor_style = Style::default()
-        .bg(Color::White)
-        .fg(Color::Black);
+    let cursor_style = Style::default().bg(Color::White).fg(Color::Black);
 
     let input_line = Line::from(vec![
         Span::raw(before),

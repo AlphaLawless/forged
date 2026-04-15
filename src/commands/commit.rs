@@ -6,12 +6,12 @@ use crate::ai::FailoverReport;
 use crate::ai::provider::{
     GenerateOpts, generate_description_with_failover, generate_messages_with_failover,
 };
-use crate::tui::widgets::select::SelectItem;
 use crate::clipboard;
 use crate::config::CommitType;
 use crate::config::Config;
 use crate::git;
 use crate::prompt;
+use crate::tui::widgets::select::SelectItem;
 
 pub struct CommitOpts {
     pub generate: Option<u8>,
@@ -432,10 +432,8 @@ fn settings_menu(session: &mut SessionConfig) -> Result<bool> {
 
     loop {
         let items = vec![
-            SelectItem::new(SETTING_LOCALE, Field::Locale)
-                .with_hint(&session.locale),
-            SelectItem::new(SETTING_TYPE, Field::Type)
-                .with_hint(session.commit_type.as_str()),
+            SelectItem::new(SETTING_LOCALE, Field::Locale).with_hint(&session.locale),
+            SelectItem::new(SETTING_TYPE, Field::Type).with_hint(session.commit_type.as_str()),
             SelectItem::new(SETTING_MAX_LENGTH, Field::MaxLength)
                 .with_hint(session.max_length.to_string()),
             SelectItem::new(SETTING_GENERATE, Field::Generate)
@@ -443,9 +441,7 @@ fn settings_menu(session: &mut SessionConfig) -> Result<bool> {
             SelectItem::new(SETTING_BACK, Field::Back),
         ];
 
-        let Some(field) =
-            crate::tui::widgets::select::run("Session settings", items, 0)?
-        else {
+        let Some(field) = crate::tui::widgets::select::run("Session settings", items, 0)? else {
             break;
         };
 
@@ -529,7 +525,6 @@ fn pick_message(messages: &[String]) -> Result<Option<String>> {
 }
 
 // --- Helpers ---
-
 
 fn do_commit(message: &str, no_verify: bool, extra_args: &[String]) -> Result<()> {
     match git::commit(message, no_verify, extra_args)? {

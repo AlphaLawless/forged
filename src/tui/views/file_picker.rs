@@ -6,8 +6,8 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::tui::{theme, widgets::multi_select};
 use crate::tui::widgets::multi_select::{MultiSelectAction, MultiSelectItem, MultiSelectState};
+use crate::tui::{theme, widgets::multi_select};
 
 pub struct FilePickerState {
     pub select: MultiSelectState<String>,

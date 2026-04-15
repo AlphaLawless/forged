@@ -272,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn test_select_G_jumps_to_last() {
+    fn test_select_capital_g_jumps_to_last() {
         let mut s = make_state();
         s.handle_key(key(KeyCode::Char('G')));
         assert_eq!(s.selected, 2);

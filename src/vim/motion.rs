@@ -102,7 +102,10 @@ pub fn word_forward(buf: &Buffer) -> Cursor {
 
     if col >= chars.len() {
         if row + 1 < buf.lines.len() {
-            return Cursor { row: row + 1, col: 0 };
+            return Cursor {
+                row: row + 1,
+                col: 0,
+            };
         }
         return buf.cursor;
     }
@@ -118,7 +121,10 @@ pub fn word_forward(buf: &Buffer) -> Cursor {
 
     if col >= chars.len() {
         if row + 1 < buf.lines.len() {
-            return Cursor { row: row + 1, col: 0 };
+            return Cursor {
+                row: row + 1,
+                col: 0,
+            };
         }
         return Cursor {
             row,

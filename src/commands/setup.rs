@@ -204,16 +204,9 @@ fn collect_fallback_providers(primary_key: &str) -> Result<Vec<ProviderEntry>> {
             break;
         }
 
-        let confirm_items = vec![
-            SelectItem::new("No", false),
-            SelectItem::new("Yes", true),
-        ];
-        let add = crate::tui::widgets::select::run(
-            "Add a fallback provider?",
-            confirm_items,
-            0,
-        )?
-        .unwrap_or(false);
+        let confirm_items = vec![SelectItem::new("No", false), SelectItem::new("Yes", true)];
+        let add = crate::tui::widgets::select::run("Add a fallback provider?", confirm_items, 0)?
+            .unwrap_or(false);
 
         if !add {
             break;
@@ -281,8 +274,8 @@ pub fn run_local() -> Result<Config> {
             &config.api_key[..config.api_key.len().min(8)]
         )
     };
-    let entered = text_input::run_masked("Enter your API key", &hint)?
-        .unwrap_or_else(|| exit_cancelled());
+    let entered =
+        text_input::run_masked("Enter your API key", &hint)?.unwrap_or_else(|| exit_cancelled());
     if !entered.is_empty() {
         config.api_key = entered;
     }

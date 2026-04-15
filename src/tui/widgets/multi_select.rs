@@ -169,8 +169,8 @@ impl<T: Clone> MultiSelectState<T> {
 }
 
 pub fn render<T>(frame: &mut Frame, area: Rect, state: &MultiSelectState<T>) {
-    let [list_area, hint_area] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)])
-        .areas(area);
+    let [list_area, hint_area] =
+        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
 
     let items: Vec<ListItem> = state
         .filtered

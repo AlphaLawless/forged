@@ -139,8 +139,7 @@ pub fn run_list() -> Result<()> {
             .map(|o| SelectItem::new(o.clone(), o.clone()))
             .collect();
 
-        let Some(choice) =
-            crate::tui::widgets::select::run("Select a config to view", items, 0)?
+        let Some(choice) = crate::tui::widgets::select::run("Select a config to view", items, 0)?
         else {
             break;
         };
