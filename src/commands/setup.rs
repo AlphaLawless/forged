@@ -1,9 +1,9 @@
 use anyhow::{Context, Result, bail};
 use colored::Colorize;
-use inquire::{Confirm, Password, PasswordDisplayMode, Select, Text};
 use std::path::PathBuf;
 
 use crate::config::{self, CommitType, Config, ProviderEntry};
+use crate::tui::widgets::{select::SelectItem, text_input};
 
 #[derive(Debug, Clone)]
 pub struct ProviderInfo {
@@ -81,6 +81,86 @@ pub fn needs_setup(config: &Config) -> bool {
     config.provider.is_empty() || config.api_key.is_empty()
 }
 
+fn exit_cancelled() -> ! {
+    use colored::Colorize;
+    println!("{}", "Cancelled.".dimmed());
+    std::process::exit(0);
+}
+
+fn pick_provider(current_key: &str) -> Result<&'static ProviderInfo> {
+    let starting_idx = PROVIDER_LIST
+        .iter()
+        .position(|p| p.key == current_key)
+        .unwrap_or(0);
+    let items: Vec<SelectItem<&str>> = PROVIDER_LIST
+        .iter()
+        .map(|p| SelectItem::new(p.label, p.key))
+        .collect();
+    let key = crate::tui::widgets::select::run("Choose your AI provider", items, starting_idx)?
+        .unwrap_or_else(|| exit_cancelled());
+    find_provider(key).ok_or_else(|| anyhow::anyhow!("Unknown provider: {key}"))
+}
+
+fn pick_api_key(label: &str, current: &str) -> Result<String> {
+    let hint = if current.is_empty() {
+        "stored in ~/.forged/global".to_string()
+    } else {
+        format!(
+            "stored in ~/.forged/global (current: {}...)",
+            &current[..current.len().min(8)]
+        )
+    };
+    let entered = text_input::run_masked(label, &hint)?.unwrap_or_else(|| exit_cancelled());
+    Ok(if entered.is_empty() {
+        current.to_string()
+    } else {
+        entered
+    })
+}
+
+fn pick_model(provider_info: &ProviderInfo, current_model: &str) -> Result<String> {
+    if provider_info.models.is_empty() {
+        return Ok(String::new());
+    }
+    let default_idx = provider_info
+        .models
+        .iter()
+        .position(|m| *m == current_model)
+        .unwrap_or(0);
+    let items: Vec<SelectItem<&str>> = provider_info
+        .models
+        .iter()
+        .map(|m| SelectItem::new(*m, *m))
+        .collect();
+    let model = crate::tui::widgets::select::run("Choose a model", items, default_idx)?
+        .unwrap_or_else(|| exit_cancelled());
+    Ok(model.to_string())
+}
+
+fn pick_commit_type(current: &CommitType) -> Result<CommitType> {
+    let current_idx = COMMIT_TYPES
+        .iter()
+        .position(|(name, _)| *name == current.as_str())
+        .unwrap_or(0);
+    let items: Vec<SelectItem<&str>> = COMMIT_TYPES
+        .iter()
+        .map(|(key, label)| SelectItem::new(*label, *key))
+        .collect();
+    let key = crate::tui::widgets::select::run("Commit message format", items, current_idx)?
+        .unwrap_or_else(|| exit_cancelled());
+    CommitType::from_str_loose(key)
+}
+
+fn pick_locale(current: &str) -> Result<String> {
+    let value = text_input::run("Message language", current, "e.g. en, pt-br, ja, es")?
+        .unwrap_or_else(|| exit_cancelled());
+    Ok(if value.is_empty() {
+        current.to_string()
+    } else {
+        value
+    })
+}
+
 /// Run the interactive first-time setup wizard.
 pub fn run(existing: Option<Config>) -> Result<Config> {
     println!();
@@ -89,80 +169,19 @@ pub fn run(existing: Option<Config>) -> Result<Config> {
 
     let mut config = existing.unwrap_or_default();
 
-    // 1. Provider selection
-    let labels = available_provider_labels();
-    let starting_idx = if !config.provider.is_empty() {
-        PROVIDER_LIST
-            .iter()
-            .position(|p| p.key == config.provider)
-            .unwrap_or(0)
-    } else {
-        0
-    };
-    let selected_label = Select::new("Choose your AI provider:", labels)
-        .with_starting_cursor(starting_idx)
-        .with_page_size(10)
-        .prompt()?;
-    let provider_info =
-        find_provider_by_label(selected_label).expect("selected label must match a provider");
+    let provider_info = pick_provider(&config.provider)?;
     config.provider = provider_info.key.into();
 
-    // 2. API Key
-    let key_hint = if !config.api_key.is_empty() {
-        let visible = &config.api_key[..config.api_key.len().min(8)];
-        format!(" (current: {visible}...)")
-    } else {
-        String::new()
-    };
-    let api_key = Password::new(&format!(
-        "Enter your API key{key_hint} (stored in ~/.forged):"
-    ))
-    .with_display_mode(PasswordDisplayMode::Masked)
-    .without_confirmation()
-    .prompt()?;
-    if !api_key.is_empty() {
-        config.api_key = api_key;
-    }
+    config.api_key = pick_api_key("Enter your API key", &config.api_key)?;
 
-    // 3. Model selection
-    if !provider_info.models.is_empty() {
-        let models: Vec<&str> = provider_info.models.to_vec();
-        let default_idx = models.iter().position(|m| *m == config.model).unwrap_or(0);
-        let model = Select::new("Choose a model:", models)
-            .with_starting_cursor(default_idx)
-            .with_page_size(10)
-            .prompt()?;
-        config.model = model.to_string();
-    }
+    config.model = pick_model(provider_info, &config.model)?;
 
-    // 4. Commit type
-    let type_labels: Vec<&str> = COMMIT_TYPES.iter().map(|(_, label)| *label).collect();
-    let current_type_idx = COMMIT_TYPES
-        .iter()
-        .position(|(name, _)| *name == config.commit_type.as_str())
-        .unwrap_or(0);
-    let type_selection = Select::new("Commit message format:", type_labels)
-        .with_starting_cursor(current_type_idx)
-        .with_page_size(10)
-        .prompt()?;
-    let selected_type = COMMIT_TYPES
-        .iter()
-        .find(|(_, label)| *label == type_selection)
-        .map(|(name, _)| *name)
-        .unwrap_or("conventional");
-    config.commit_type = CommitType::from_str_loose(selected_type)?;
+    config.commit_type = pick_commit_type(&config.commit_type)?;
 
-    // 5. Locale
-    let locale = Text::new("Message language:")
-        .with_default(&config.locale)
-        .with_help_message("e.g. en, pt-br, ja, es")
-        .prompt()?;
-    config.locale = locale;
+    config.locale = pick_locale(&config.locale)?;
 
-    // 6. Optional fallback providers
     config.fallback_providers = collect_fallback_providers(&config.provider)?;
 
-    // Save
     config.save_global()?;
 
     println!();
@@ -185,22 +204,21 @@ fn collect_fallback_providers(primary_key: &str) -> Result<Vec<ProviderEntry>> {
             break;
         }
 
-        let add = Confirm::new("Add a fallback provider?")
-            .with_default(false)
-            .prompt()?;
+        let confirm_items = vec![SelectItem::new("No", false), SelectItem::new("Yes", true)];
+        let add = crate::tui::widgets::select::run("Add a fallback provider?", confirm_items, 0)?
+            .unwrap_or(false);
 
         if !add {
             break;
         }
 
-        // Filter out primary and already-added providers
         let used: Vec<&str> = std::iter::once(primary_key)
             .chain(fallbacks.iter().map(|f: &ProviderEntry| f.name.as_str()))
             .collect();
-        let remaining: Vec<&str> = PROVIDER_LIST
+        let remaining: Vec<SelectItem<&str>> = PROVIDER_LIST
             .iter()
             .filter(|p| !used.contains(&p.key))
-            .map(|p| p.label)
+            .map(|p| SelectItem::new(p.label, p.key))
             .collect();
 
         if remaining.is_empty() {
@@ -208,25 +226,17 @@ fn collect_fallback_providers(primary_key: &str) -> Result<Vec<ProviderEntry>> {
             break;
         }
 
-        let label = Select::new("Fallback provider:", remaining)
-            .with_page_size(10)
-            .prompt()?;
-        let info = find_provider_by_label(label).expect("label must match");
+        let key = crate::tui::widgets::select::run("Fallback provider", remaining, 0)?
+            .unwrap_or_else(|| exit_cancelled());
+        let info = find_provider(key).ok_or_else(|| anyhow::anyhow!("Unknown provider"))?;
 
-        let api_key = Password::new(&format!("API key for {}:", info.label))
-            .with_display_mode(PasswordDisplayMode::Masked)
-            .without_confirmation()
-            .prompt()?;
+        let api_key = text_input::run_masked(
+            &format!("API key for {}", info.label),
+            "stored in ~/.forged/global",
+        )?
+        .unwrap_or_else(|| exit_cancelled());
 
-        let model = if !info.models.is_empty() {
-            let models: Vec<&str> = info.models.to_vec();
-            Select::new("Model:", models)
-                .with_page_size(10)
-                .prompt()?
-                .to_string()
-        } else {
-            String::new()
-        };
+        let model = pick_model(info, "")?;
 
         fallbacks.push(ProviderEntry {
             name: info.key.into(),
@@ -249,87 +259,37 @@ pub fn run_local() -> Result<Config> {
     println!("{}", "  Local config setup ".bold().on_cyan().black());
     println!("{}", format!("  Profile: {profile}\n").dimmed());
 
-    // Load current merged config as starting point
     let _global = Config::load_global()?;
     let mut config = Config::load()?;
 
-    // 1. Provider selection (may differ per-repo)
-    let labels = available_provider_labels();
-    let starting_idx = if !config.provider.is_empty() {
-        PROVIDER_LIST
-            .iter()
-            .position(|p| p.key == config.provider)
-            .unwrap_or(0)
-    } else {
-        0
-    };
-    let selected_label = Select::new("Choose your AI provider:", labels)
-        .with_starting_cursor(starting_idx)
-        .with_page_size(10)
-        .prompt()?;
-    let provider_info =
-        find_provider_by_label(selected_label).expect("selected label must match a provider");
+    let provider_info = pick_provider(&config.provider)?;
     config.provider = provider_info.key.into();
 
-    // 2. API Key (may need different key per-repo, e.g. OpenRouter vs Claude)
-    let key_hint = if !config.api_key.is_empty() {
-        let visible = &config.api_key[..config.api_key.len().min(8)];
-        format!(" (current: {visible}...)")
+    // API key is optional for local — inherits from global if empty
+    let hint = if config.api_key.is_empty() {
+        "leave empty to inherit from global".to_string()
     } else {
-        String::new()
+        format!(
+            "current: {}... — leave empty to inherit from global",
+            &config.api_key[..config.api_key.len().min(8)]
+        )
     };
-    let api_key = Password::new(&format!(
-        "Enter your API key{key_hint} (leave empty to inherit global):"
-    ))
-    .with_display_mode(PasswordDisplayMode::Masked)
-    .without_confirmation()
-    .prompt()?;
-    if !api_key.is_empty() {
-        config.api_key = api_key;
+    let entered =
+        text_input::run_masked("Enter your API key", &hint)?.unwrap_or_else(|| exit_cancelled());
+    if !entered.is_empty() {
+        config.api_key = entered;
     }
 
-    // 3. Model selection
-    if !provider_info.models.is_empty() {
-        let models: Vec<&str> = provider_info.models.to_vec();
-        let default_idx = models.iter().position(|m| *m == config.model).unwrap_or(0);
-        let model = Select::new("Choose a model:", models)
-            .with_starting_cursor(default_idx)
-            .with_page_size(10)
-            .prompt()?;
-        config.model = model.to_string();
-    }
+    config.model = pick_model(provider_info, &config.model)?;
 
-    // 4. Commit type
-    let type_labels: Vec<&str> = COMMIT_TYPES.iter().map(|(_, label)| *label).collect();
-    let current_type_idx = COMMIT_TYPES
-        .iter()
-        .position(|(name, _)| *name == config.commit_type.as_str())
-        .unwrap_or(0);
-    let type_selection = Select::new("Commit message format:", type_labels)
-        .with_starting_cursor(current_type_idx)
-        .with_page_size(10)
-        .prompt()?;
-    let selected_type = COMMIT_TYPES
-        .iter()
-        .find(|(_, label)| *label == type_selection)
-        .map(|(name, _)| *name)
-        .unwrap_or("conventional");
-    config.commit_type = CommitType::from_str_loose(selected_type)?;
+    config.commit_type = pick_commit_type(&config.commit_type)?;
 
-    // 5. Locale
-    let locale = Text::new("Message language:")
-        .with_default(&config.locale)
-        .with_help_message("e.g. en, pt-br, ja, es")
-        .prompt()?;
-    config.locale = locale;
+    config.locale = pick_locale(&config.locale)?;
 
-    // 6. Optional fallback providers
     config.fallback_providers = collect_fallback_providers(&config.provider)?;
 
-    // Save only fields that differ from global
     config.save_local(&profile)?;
 
-    // Write .forged profile file in repo root
     let dot_forged = PathBuf::from(&repo_root).join(".forged");
     std::fs::write(&dot_forged, format!("{profile}\n"))
         .context("Failed to write .forged profile file")?;
@@ -364,16 +324,13 @@ pub fn remove_local() -> Result<()> {
         .to_string();
 
     if profile.is_empty() {
-        // Just remove the empty pointer file
         std::fs::remove_file(&dot_forged).ok();
         println!("{}", "No local config for this repo.".dimmed());
         return Ok(());
     }
 
-    // Remove the profile file from ~/.forged/locals/
     let removed = config::remove_local_profile(&profile)?;
 
-    // Remove the .forged pointer file
     std::fs::remove_file(&dot_forged).context("Failed to remove .forged file")?;
 
     println!();
@@ -440,12 +397,16 @@ pub fn use_profile(name: Option<&str>) -> Result<()> {
             }
             n.to_string()
         }
-        None => Select::new("Choose a profile to use:", profiles)
-            .with_page_size(10)
-            .prompt()?,
+        None => {
+            let items: Vec<SelectItem<String>> = profiles
+                .iter()
+                .map(|p| SelectItem::new(p.clone(), p.clone()))
+                .collect();
+            crate::tui::widgets::select::run("Choose a profile to use", items, 0)?
+                .unwrap_or_else(|| exit_cancelled())
+        }
     };
 
-    // Write .forged pointer in repo root
     let dot_forged = PathBuf::from(&repo_root).join(".forged");
     std::fs::write(&dot_forged, format!("{selected}\n"))
         .context("Failed to write .forged profile file")?;
