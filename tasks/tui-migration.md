@@ -1,665 +1,181 @@
 # Migração: inquire → ratatui
 
-## Objetivo
+## Status: CONCLUÍDA ✓
 
-Substituir o `inquire` por `ratatui` + `crossterm` em todos os pontos de interação do
-`forged`, adotando a separação de responsabilidades do claude-code-rust:
-
-- `src/tui/` — renderização pura (leitura de estado, zero mutações)
-- Estado encapsulado em structs dedicadas por view
-- Navegação vim-like (`j/k`, `Enter`, `Esc`, `Space`)
-- Sem setinhas como único modo de navegação
-
-Referência de arquitetura: `study/claude-code-rust/src/{app,ui}/`
+Todas as fases implementadas. `inquire` removido. `cargo fmt`, `cargo clippy -- -D warnings`
+e `cargo test` passando limpos. 214 unit tests + 26 integration tests.
 
 ---
 
-## Inventário do inquire atual
-
-| Componente | Arquivo | inquire API usada |
-|---|---|---|
-| Action menu pós-geração | `commands/commit.rs` | `Select` |
-| File picker (no staged) | `commands/commit.rs` | `MultiSelect` |
-| Settings sub-menu | `commands/commit.rs` | `Select` + `Text` |
-| Setup wizard global | `commands/setup.rs` | `Select`, `Text`, `Password` |
-| Setup local (per-repo) | `commands/setup.rs` | `Select`, `Text`, `Password` |
-| Config list interativo | `commands/config.rs` | `Select` |
-| Editor (edit message) | `commands/commit.rs` | `Editor` → mantém $EDITOR externo |
-
-**Total de call sites para migrar:** ~14 pontos de uso do inquire.
-
----
-
-## Arquitetura alvo
+## Arquitetura entregue
 
 ```
 src/
-├── vim/                      # motor vim-like — zero deps de TUI (Fase 8)
-│   ├── mod.rs                # re-exports: Buffer, VimKey, BufferEvent
-│   ├── buffer.rs             # Buffer + Cursor + Mode + histórico
+├── vim/                      # motor vim-like — zero deps de TUI
+│   ├── mod.rs                # re-exports: Buffer, VimKey, BufferEvent, Mode, Cursor
+│   ├── buffer.rs             # Buffer + Cursor + Mode + Snapshot (undo)
 │   ├── motion.rs             # funções puras de cálculo de posição
-│   ├── command.rs            # mutações: insert, delete, open_line...
-│   └── history.rs            # Snapshot para undo/redo
+│   └── command.rs            # mutações: insert, delete, open_line...
 │
 └── tui/
-    ├── mod.rs                # terminal lifecycle: init, restore, run_with
-    ├── theme.rs              # cores e estilos centralizados
+    ├── mod.rs                # run_with<S,R> — lifecycle + event loop
+    ├── theme.rs              # paleta de cores centralizada
     ├── widgets/
-    │   ├── select.rs         # lista vertical com j/k + Enter/Esc
-    │   ├── multi_select.rs   # lista com Space para toggle + a/n
-    │   └── text_input.rs     # linha de texto + run_masked (senhas)
+    │   ├── select.rs         # SelectState<T> — j/k, Enter, Esc, g/G, hints
+    │   ├── multi_select.rs   # MultiSelectState<T> — Space, a, n, / filtro
+    │   └── text_input.rs     # TextInputState — cursor completo + run_masked()
     └── views/
-        ├── action_menu.rs    # menu pós-geração
-        ├── file_picker.rs    # staging de arquivos
-        └── editor.rs         # adaptador: VimKey ↔ crossterm + render ratatui
+        ├── action_menu.rs    # mensagem em box + lista de ações genérica
+        ├── file_picker.rs    # MultiSelect para staging de arquivos
+        └── editor.rs         # adaptador VimKey ↔ crossterm + render ratatui
 ```
 
-**Regra de dependência:** `src/vim/` nunca importa de `src/tui/`. O fluxo é
-unidirecional: `crossterm::KeyEvent` → adaptado em `editor.rs` → `VimKey` →
-`vim::Buffer` → estado renderizado pelo ratatui.
-
-### Padrão de separação
-
-```
-State struct (puro dado)
-    ↓ mutado por
-Event handler (recebe KeyEvent → muta estado → retorna Action)
-    ↓ Action processada por
-Caller (commit.rs, setup.rs, config.rs)
-    ↓ estado lido por
-render() (leitura pura, zero mutações)
-```
-
-Cada view segue o mesmo contrato:
-
-```rust
-pub struct FooState { /* campos */ }
-pub enum FooAction { Done(T), Cancel, /* outros */ }
-
-impl FooState {
-    pub fn new(/* params */) -> Self { ... }
-    pub fn handle_key(&mut self, key: KeyEvent) -> Option<FooAction> { ... }
-}
-
-pub fn render(frame: &mut Frame, area: Rect, state: &FooState) { ... }
-
-pub fn run(/* params */) -> anyhow::Result<Option<T>> {
-    // init terminal, loop events, draw, restore terminal
-}
-```
-
----
-
-## Navegação padrão (todos os componentes)
-
-| Tecla | Ação |
-|---|---|
-| `j` / `↓` | próximo item |
-| `k` / `↑` | item anterior |
-| `g` / `Home` | primeiro item |
-| `G` / `End` | último item |
-| `Enter` | confirmar seleção |
-| `Esc` / `q` | cancelar / voltar |
-| `Space` | toggle (só MultiSelect) |
-| `a` | selecionar todos (só MultiSelect) |
-| `n` | desselecionar todos (só MultiSelect) |
-| `/` | filtro de busca (só MultiSelect com muitos itens) |
+**Regra de dependência:** `src/vim/` nunca importa de `src/tui/`. Único ponto de
+cruzamento: `editor.rs` via `to_vim_key(crossterm::KeyEvent) → VimKey`.
 
 ---
 
 ## Fases
 
-### Fase 1 — Infraestrutura TUI (não-breaking)
+### Fase 1 — Infraestrutura TUI [DONE]
 
-**Arquivos criados:** `src/tui/mod.rs`, `src/tui/theme.rs`, `src/tui/events.rs`
-
-**Cargo.toml — adicionar:**
-```toml
-ratatui = "0.30"
-crossterm = { version = "0.29", features = ["event-stream"] }
-```
-
-**Cargo.toml — manter por enquanto:**
-```toml
-inquire = { version = "0.7", features = ["editor"] }
-```
-
-**`src/tui/mod.rs`:**
-- `pub fn init() -> Terminal<CrosstermBackend<Stdout>>`
-- `pub fn restore(terminal: Terminal<...>)`
-- `pub fn run_with<S, A>(state: S, render_fn, handle_fn) -> anyhow::Result<Option<A>>`
-
-**`src/tui/theme.rs`:**
-- Paleta de cores: `PRIMARY`, `SELECTED`, `DIM`, `ERROR`, `SUCCESS`
-- Estilos reutilizáveis: `selected_style()`, `normal_style()`, `hint_style()`
-
-**`src/tui/events.rs`:**
-- `pub fn next_event(timeout: Duration) -> anyhow::Result<Option<Event>>`
-- Loop de eventos com drain não-bloqueante
-
-**Testes:** Nenhum novo (infraestrutura pura). Todos os 184 testes existentes devem continuar passando.
+- [x] `ratatui = "0.30"` e `crossterm = "0.29"` adicionados ao `Cargo.toml`
+- [x] `src/tui/mod.rs` — `run_with<S, R>()` com restore garantido via closure
+- [x] `src/tui/theme.rs` — `PRIMARY`, `SELECTED_BG`, `DIM`, `SUCCESS`, `ERROR`, `BORDER`
+- [x] `src/lib.rs` — `pub mod tui` adicionado
 
 ---
 
-### Fase 2 — Widget `select` + Action Menu
+### Fase 2 — Widget `select` + Action Menu [DONE]
 
-**Arquivos criados:** `src/tui/widgets/select.rs`, `src/tui/views/action_menu.rs`
-
-**`SelectState<T>`:**
-```rust
-pub struct SelectState<T> {
-    pub items: Vec<SelectItem<T>>,
-    pub selected: usize,
-    pub title: String,
-    pub filter: String,       // busca inline opcional
-}
-
-pub struct SelectItem<T> {
-    pub label: String,
-    pub value: T,
-    pub hint: Option<String>, // texto dim à direita
-}
-
-pub enum SelectAction<T> {
-    Picked(T),
-    Cancelled,
-}
-```
-
-**`src/tui/views/action_menu.rs`:**
-- `pub fn run(messages: &[String]) -> anyhow::Result<Option<CommitAction>>`
-- Exibe a mensagem gerada no topo (em bloco com borda)
-- Lista de ações abaixo: Commit / Edit / Regenerate / Settings / Cancel
-- Highlight do item selecionado com cor `SELECTED` + seta `❯`
-
-**Migrar em:** `commands/commit.rs` — substituir a chamada ao `inquire::Select` do action menu.
-
-**Testes novos (widget):**
-- `test_select_state_j_moves_down`
-- `test_select_state_k_moves_up`
-- `test_select_state_wraps_at_bottom`
-- `test_select_state_enter_returns_picked`
-- `test_select_state_esc_returns_cancelled`
-- `test_select_state_g_jumps_to_top`
+- [x] `src/tui/widgets/select.rs` — `SelectState<T>`, `SelectItem<T>`, `SelectAction<T>`
+  - j/k + ↑/↓, g/G, Enter, Esc/q, hint dim à direita
+  - `run<T>(title, items, starting_idx)` standalone
+- [x] `src/tui/views/action_menu.rs` — mensagem em box rounded + lista de ações
+- [x] `commands/commit.rs` — `action_menu()` e `pick_message()` migrados
+- [x] 11 testes novos em `select.rs`
 
 ---
 
-### Fase 3 — Widget `multi_select` + File Picker
+### Fase 3 — Widget `multi_select` + File Picker [DONE]
 
-**Arquivos criados:** `src/tui/widgets/multi_select.rs`, `src/tui/views/file_picker.rs`
-
-**`MultiSelectState<T>`:**
-```rust
-pub struct MultiSelectState<T> {
-    pub items: Vec<MultiSelectItem<T>>,
-    pub cursor: usize,
-    pub filter: String,
-    pub filtered_indices: Vec<usize>,  // calculado após cada keystroke
-}
-
-pub struct MultiSelectItem<T> {
-    pub label: String,
-    pub value: T,
-    pub checked: bool,
-}
-
-pub enum MultiSelectAction<T> {
-    Confirmed(Vec<T>),   // itens marcados
-    Cancelled,
-}
-```
-
-**Rendering:**
-- `[x] src/main.rs` (marcado, cursor) em verde
-- `[ ] src/lib.rs` (desmarcado) normal
-- `❯ [ ] src/config.rs` (cursor atual) com fundo highlight
-- Footer: `space=toggle  a=all  n=none  enter=confirm  esc=cancel`
-- Campo `/` filtra por substring (atualiza `filtered_indices`)
-
-**`src/tui/views/file_picker.rs`:**
-- `pub fn run(files: &[String]) -> anyhow::Result<Option<Vec<String>>>`
-- Todos os itens pré-selecionados (comportamento atual preservado)
-
-**Migrar em:** `commands/commit.rs` — bloco `if unstaged.is_empty()`.
-
-**Testes novos:**
-- `test_multiselect_space_toggles`
-- `test_multiselect_a_selects_all`
-- `test_multiselect_n_deselects_all`
-- `test_multiselect_filter_reduces_visible`
-- `test_multiselect_confirm_returns_checked`
-- `test_multiselect_empty_confirm_ok`
+- [x] `src/tui/widgets/multi_select.rs` — `MultiSelectState<T>`, Space/a/n/g/G, filtro `/`
+- [x] `src/tui/views/file_picker.rs` — todos os arquivos pré-selecionados
+- [x] `commands/commit.rs` — `offer_stage_changes()` migrado
+- [x] 10 testes novos em `multi_select.rs`
 
 ---
 
-### Fase 4 — Widget `text_input` + Settings Menu
+### Fase 4 — Widget `text_input` + Settings Menu [DONE]
 
-**Arquivos criados:** `src/tui/widgets/text_input.rs`, `src/tui/views/settings.rs`
-
-**`TextInputState`:**
-```rust
-pub struct TextInputState {
-    pub value: String,
-    pub cursor: usize,
-    pub label: String,
-    pub hint: Option<String>,
-    pub validator: Option<Box<dyn Fn(&str) -> bool>>,
-    pub error: Option<String>,
-}
-```
-
-**Teclas no text_input:**
-- Caracteres alfanuméricos → inserir
-- `Backspace` → apagar
-- `←`/`→` → mover cursor
-- `Ctrl+A` → início, `Ctrl+E` → fim
-- `Enter` → confirmar (chama validator)
-- `Esc` → cancelar
-
-**`src/tui/views/settings.rs`:**
-- Sub-menu com 4 campos: locale, commit_type, max_length, generate
-- Primeiro: `Select` para escolher qual campo editar
-- Segundo: `TextInput` ou `Select` dependendo do campo
-- Retorna `SessionConfig` atualizado
-
-**Migrar em:** `commands/commit.rs` — `settings_menu()`.
-
-**Testes novos:**
-- `test_text_input_typing`
-- `test_text_input_backspace`
-- `test_text_input_enter_validates`
-- `test_text_input_esc_cancels`
-- `test_settings_view_returns_updated_session`
+- [x] `src/tui/widgets/text_input.rs` — cursor completo (←/→, Ctrl+A/E, Delete), `run_masked()`
+- [x] `commands/commit.rs` — `settings_menu()` migrado com `SelectItem::with_hint()` mostrando valores atuais
+- [x] 8 testes novos em `text_input.rs`
 
 ---
 
-### Fase 5 — Widget `password_input` + Setup Wizard
+### Fase 5 — Setup Wizard [DONE]
 
-**Arquivos criados:** `src/tui/widgets/password_input.rs`, `src/tui/views/setup_wizard.rs`
-
-**`PasswordInputState`:** idêntico ao `TextInputState` mas `render()` exibe `*` por caractere.
-
-**`src/tui/views/setup_wizard.rs`:**
-
-O wizard tem múltiplos passos sequenciais. Cada passo é uma view própria:
-
-```
-Passo 1: Select provider
-Passo 2: PasswordInput API key
-Passo 3: Select model (filtrado por provider)
-Passo 4: Select commit type
-Passo 5: Confirm "Add fallback provider?" (Select com [Yes, No])
-  → Se Yes: repete passos 1-3 para fallback (máx 3x)
-Passo 6: Resumo + salvar
-```
-
-**`WizardState`:**
-```rust
-pub struct WizardState {
-    pub step: WizardStep,
-    pub provider: Option<String>,
-    pub api_key: String,
-    pub model: Option<String>,
-    pub fallbacks: Vec<ProviderEntry>,
-    pub error: Option<String>,
-}
-
-pub enum WizardStep {
-    SelectProvider,
-    EnterApiKey,
-    SelectModel,
-    SelectCommitType,
-    AskFallback,
-    Done,
-}
-```
-
-**Header fixo** em todas as telas: título do wizard + progresso (`1/5`).
-**Rodapé fixo**: `enter=avançar  esc=voltar  q=cancelar`.
-
-**Migrar em:** `commands/setup.rs` — `run()` e `run_local()`.
-
-**Testes novos:**
-- `test_wizard_step_advance`
-- `test_wizard_step_back`
-- `test_wizard_password_masked_render` (verifica que render não expõe chars)
-- `test_wizard_fallback_loop_max_3`
+- [x] `text_input::run_masked()` via `TextInputState::with_masked()` — exibe `•` por char
+- [x] `commands/setup.rs` — todas as chamadas `inquire::{Select, Text, Password, Confirm}` migradas
+  - `pick_provider`, `pick_api_key`, `pick_model`, `pick_commit_type`, `pick_locale`
+  - `collect_fallback_providers` — Yes/No via `select::run`
+  - `use_profile` — picker interativo via `select::run`
+- [x] `exit_cancelled() -> !` — Esc imprime "Cancelled." e sai com código 0
 
 ---
 
-### Fase 6 — Config Browser
+### Fase 6 — Config Browser [DONE]
 
-**Arquivo criado:** `src/tui/views/config_list.rs`
-
-**`ConfigBrowserState`:**
-```rust
-pub struct ConfigBrowserState {
-    pub profiles: Vec<ProfileEntry>,
-    pub cursor: usize,
-    pub detail: Option<ConfigWithSources>,
-}
-
-pub struct ProfileEntry {
-    pub name: String,       // "Global" | nome do profile local
-    pub path: PathBuf,
-}
-```
-
-**Layout em duas colunas:**
-- Esquerda (30%): lista de profiles com j/k
-- Direita (70%): config renderizada com source tags coloridas
-  - `[local]` em verde
-  - `[global]` em azul dim
-  - `[default]` em cinza
-
-**Migrar em:** `commands/config.rs` — `run_list()`.
-
-**Testes novos:**
-- `test_config_browser_navigation`
-- `test_config_browser_displays_sources`
+- [x] `commands/config.rs` — `run_list()` migrado para `select::run`
+- [x] `use inquire::Select` removido
 
 ---
 
-### Fase 7 — Limpeza
+### Fase 7 — Limpeza [DONE]
 
-- Remover `inquire` de `Cargo.toml` (verificar que zero uses restam)
-- Remover feature `editor` se `inquire::Editor` não é mais usado
-  - **Nota:** `Edit message` abre `$EDITOR` diretamente via `std::process::Command` — não usa inquire. Manter esse comportamento.
-- Atualizar `src/lib.rs` para re-exportar `tui` se necessário
-- Atualizar `CLAUDE.md` da fase se necessário
-- Rodar `cargo clippy -- -D warnings` e `cargo test`
+- [x] `inquire` removido do `Cargo.toml`
+- [x] `open_in_editor()` substituído por `editor::run()` inline
+- [x] `cargo clippy -- -D warnings` — zero warnings
+- [x] `cargo fmt --all --check` — sem diff
+- [x] `test_select_G_jumps_to_last` renomeado para `test_select_capital_g_jumps_to_last` (snake_case)
 
 ---
 
-## O que NÃO muda
+### Fase 8 — Motor vim-like (`src/vim/`) [DONE]
 
-| Item | Razão |
+- [x] `src/vim/buffer.rs` — `Buffer::apply(VimKey) → BufferEvent`
+  - Modos: `Normal` / `Insert`
+  - Sequência `dd`, histórico de undo (50 entradas), `pending_d`
+- [x] `src/vim/motion.rs` — funções puras: `left`, `right_normal`, `up`, `down`,
+  `up_insert`, `down_insert`, `line_start`, `line_end`, `line_end_insert`,
+  `word_forward`, `word_backward`
+- [x] `src/vim/command.rs` — `insert_char`, `insert_newline`, `backspace`,
+  `delete_char`, `delete_line`, `open_line_below`, `open_line_above`
+- [x] `src/tui/views/editor.rs` — adaptador único crossterm ↔ vim ↔ ratatui
+  - Borda muda de cor: `BORDER` (NORMAL) → `PRIMARY` (INSERT)
+  - `[NORMAL]` / `[INSERT]` na borda inferior
+- [x] `commands/commit.rs` — `Action::Edit` usa `editor::run()`, edição inline
+  - Esc no editor → volta ao action menu sem mudança
+  - Enter em Normal → `current_messages = vec![edited]`, loop exibe versão editada
+- [x] 27 testes novos em `src/vim/` (10 buffer, 8 motion, 9 command)
+
+---
+
+## Contagem final de testes
+
+| Módulo | Testes |
 |---|---|
-| `Edit message` → abre `$EDITOR` | Já usa `std::process::Command`, não inquire |
-| Toda lógica de geração AI | Não toca em UI |
-| Config parsing/saving | Sem UI |
-| Git operations | Sem UI |
-| Todos os testes existentes (unitários + integração) | Testam lógica, não UI |
-| `headless mode` (GIT_PARAMS / !atty) | Bypass de UI, mantido |
-| `--yes` flag | Bypass de UI, mantido |
+| `tui/widgets/select.rs` | 11 |
+| `tui/widgets/multi_select.rs` | 10 |
+| `tui/widgets/text_input.rs` | 8 |
+| `vim/buffer.rs` | 10 |
+| `vim/motion.rs` | 8 |
+| `vim/command.rs` | 9 |
+| Demais módulos (config, git, ai, etc.) | 158 |
+| **Total unit** | **214** |
+| **Total integration** | **26** |
+| **Total geral** | **240** |
 
 ---
 
+## Navegação padrão implementada
+
+| Tecla | Select | MultiSelect | Editor (Normal) | Editor (Insert) |
+|---|---|---|---|---|
+| `j` / `↓` | próximo | próximo | linha abaixo | linha abaixo |
+| `k` / `↑` | anterior | anterior | linha acima | linha acima |
+| `h` / `←` | — | — | cursor ← | cursor ← |
+| `l` / `→` | — | — | cursor → | cursor → |
+| `g` / `Home` | primeiro | primeiro | — | — |
+| `G` / `End` | último | último | — | — |
+| `0` | — | — | início da linha | — |
+| `$` | — | — | fim da linha | — |
+| `w` | — | — | próxima palavra | — |
+| `b` | — | — | palavra anterior | — |
+| `Enter` | confirma | confirma | `Confirmed` | quebra linha |
+| `Esc` / `q` | cancela | cancela | `Cancelled` | → NORMAL |
+| `Space` | — | toggle | — | — |
+| `a` | — | selecionar todos | → INSERT (após) | — |
+| `A` | — | — | → INSERT (fim) | — |
+| `i` | — | — | → INSERT (antes) | — |
+| `o` / `O` | — | — | nova linha | — |
+| `x` | — | — | apaga char | — |
+| `dd` | — | — | apaga linha | — |
+| `u` | — | — | undo | — |
+| `n` | — | desselecionar | — | — |
+| `/` | — | filtro | — | — |
+
 ---
 
-### Fase 8 — Motor vim-like (`src/vim/`) [EXTRA]
+## O que NÃO mudou (confirmado)
 
-Extrair toda a lógica de modal-editing para um módulo independente `src/vim/`, sem
-qualquer dependência de ratatui, crossterm ou TUI. O motor é puro Rust — recebe
-eventos de tecla como tipos simples e retorna mutações de estado. A view em
-`src/tui/views/editor.rs` é apenas o adaptador que conecta o motor ao TUI.
-
-#### Princípio de separação
-
-```
-src/vim/          ← motor puro (zero deps de TUI)
-    mod.rs
-    buffer.rs     ← estrutura de texto + cursor
-    motion.rs     ← cálculo de posições (hjkl, w/b, 0/$)
-    command.rs    ← execução de comandos (dd, x, u, i, a...)
-    history.rs    ← undo/redo stack
-
-src/tui/views/
-    editor.rs     ← adaptador: KeyEvent → VimKey → motor → render ratatui
-```
-
-A regra é: nada em `src/vim/` pode importar de `src/tui/`. O fluxo é unidirecional:
-
-```
-crossterm::KeyEvent
-    ↓  (adaptado em editor.rs)
-vim::VimKey          ← tipo próprio, sem coupling com crossterm
-    ↓
-vim::Buffer::apply()  ← única função de entrada do motor
-    ↓
-vim::Buffer          ← novo estado (imutável por design interno)
-    ↓  (lido em editor.rs)
-ratatui render
-```
-
-#### Estrutura do motor (`src/vim/`)
-
-**`buffer.rs`** — estado completo do editor:
-```rust
-pub struct Buffer {
-    pub lines: Vec<String>,
-    pub cursor: Cursor,
-    pub mode: Mode,
-    history: Vec<Snapshot>,  // privado — exposto só via undo()
-}
-
-pub struct Cursor {
-    pub row: usize,
-    pub col: usize,
-}
-
-pub enum Mode {
-    Normal,
-    Insert,
-}
-
-impl Buffer {
-    pub fn new(text: &str) -> Self { ... }
-    pub fn text(&self) -> String { ... }          // join lines com \n
-    pub fn apply(&mut self, key: VimKey) -> BufferEvent { ... }
-    pub fn undo(&mut self) { ... }
-}
-
-pub enum BufferEvent {
-    Noop,
-    Modified,
-    ModeChanged(Mode),
-    Confirmed,   // Enter em Normal → sinal para a view fechar
-    Cancelled,   // :q / Esc com discard confirmado
-}
-```
-
-**`motion.rs`** — cálculo de posições (funções puras, sem estado):
-```rust
-pub fn move_left(buf: &Buffer) -> Cursor { ... }
-pub fn move_right(buf: &Buffer) -> Cursor { ... }
-pub fn move_up(buf: &Buffer) -> Cursor { ... }
-pub fn move_down(buf: &Buffer) -> Cursor { ... }
-pub fn move_word_forward(buf: &Buffer) -> Cursor { ... }
-pub fn move_word_backward(buf: &Buffer) -> Cursor { ... }
-pub fn move_line_start(buf: &Buffer) -> Cursor { ... }
-pub fn move_line_end(buf: &Buffer) -> Cursor { ... }
-```
-
-**`command.rs`** — execução de comandos (recebe `&mut Buffer`):
-```rust
-pub fn delete_char(buf: &mut Buffer) { ... }       // x
-pub fn delete_line(buf: &mut Buffer) { ... }       // dd
-pub fn open_line_below(buf: &mut Buffer) { ... }   // o
-pub fn open_line_above(buf: &mut Buffer) { ... }   // O
-pub fn insert_char(buf: &mut Buffer, c: char) { ... }
-pub fn insert_newline(buf: &mut Buffer) { ... }
-pub fn backspace(buf: &mut Buffer) { ... }
-```
-
-**`history.rs`** — snapshot simples para undo:
-```rust
-struct Snapshot {
-    lines: Vec<String>,
-    cursor: Cursor,
-}
-// Mantido dentro de Buffer, sem exposição pública além de undo()
-```
-
-**`VimKey`** — tipo intermediário (sem coupling com crossterm):
-```rust
-pub enum VimKey {
-    Char(char),
-    Enter,
-    Esc,
-    Backspace,
-    Delete,
-    Up, Down, Left, Right,
-}
-```
-
-#### Teclas suportadas — NORMAL mode
-
-| Tecla | `VimKey` | Ação |
-|---|---|---|
-| `h` / `←` | `Left` | cursor ← |
-| `l` / `→` | `Right` | cursor → |
-| `k` / `↑` | `Up` | linha acima |
-| `j` / `↓` | `Down` | linha abaixo |
-| `0` | `Char('0')` | início da linha |
-| `$` | `Char('$')` | fim da linha |
-| `w` | `Char('w')` | próxima palavra |
-| `b` | `Char('b')` | palavra anterior |
-| `x` | `Char('x')` | apaga char sob cursor |
-| `dd` | sequência `d`, `d` | apaga linha inteira |
-| `u` | `Char('u')` | undo |
-| `i` | `Char('i')` | → INSERT (antes do cursor) |
-| `a` | `Char('a')` | → INSERT (após cursor) |
-| `A` | `Char('A')` | → INSERT (fim da linha) |
-| `o` | `Char('o')` | nova linha abaixo + INSERT |
-| `O` | `Char('O')` | nova linha acima + INSERT |
-| `Enter` | `Enter` | confirma → `BufferEvent::Confirmed` |
-| `Esc` | `Esc` | prompt descarte se modificado |
-
-#### Teclas suportadas — INSERT mode
-
-| Tecla | Ação |
+| Item | Status |
 |---|---|
-| `Esc` | volta ao NORMAL |
-| Char | inserção no cursor |
-| `Backspace` | apaga anterior |
-| `Enter` | quebra linha |
-| `←/→/↑/↓` | movimentação básica |
-
-#### Adaptador view (`src/tui/views/editor.rs`)
-
-Responsabilidades únicas:
-1. Converter `crossterm::KeyEvent` → `vim::VimKey`
-2. Chamar `buffer.apply(key)`
-3. Reagir ao `BufferEvent` retornado (fechar TUI se `Confirmed`/`Cancelled`)
-4. Renderizar `buffer.lines` + cursor + indicador de modo com ratatui
-
-```rust
-// editor.rs — único ponto de contato entre os dois mundos
-fn crossterm_to_vim(key: KeyEvent) -> Option<VimKey> { ... }
-
-pub fn run(initial_text: &str) -> anyhow::Result<Option<String>> {
-    let buffer = vim::Buffer::new(initial_text);
-    crate::tui::run_with(buffer, render, |buf, event| {
-        if let Event::Key(k) = event {
-            if let Some(vk) = crossterm_to_vim(k) {
-                match buf.apply(vk) {
-                    BufferEvent::Confirmed => return Some(Some(buf.text())),
-                    BufferEvent::Cancelled => return Some(None),
-                    _ => {}
-                }
-            }
-        }
-        None
-    })
-}
-```
-
-**Layout do editor:**
-```
-┌─ edit commit message ──────────────────────────── [NORMAL] ─┐
-│ feat: add OAuth2 login flow                                  │
-│                                                              │
-│ - Add login endpoint                                         │
-│ - Add token refresh█                                         │
-└──────────────────────────────────────────────────────────────┘
-
-  Enter confirm  Esc discard  i insert  dd delete line  u undo
-```
-
-Borda muda de cor: `BORDER` em NORMAL → `PRIMARY` em INSERT.
-
-**Integração em `commit.rs`:**
-```rust
-Action::Edit => {
-    let edited = crate::tui::views::editor::run(&message)?;
-    // None = cancelou, Some(text) = confirmou
-}
-```
-
-`open_in_editor()` mantido como fallback para flag futura `--external-editor`.
-
-#### Testes novos
-
-Todos os testes do motor ficam em `src/vim/` — zero dependência de ratatui:
-
-**`vim/buffer.rs` (8 testes):**
-- `test_buffer_new_preserves_text`
-- `test_buffer_confirmed_returns_event`
-- `test_buffer_cancelled_returns_event`
-- `test_buffer_mode_starts_normal`
-- `test_buffer_i_enters_insert`
-- `test_buffer_esc_returns_to_normal`
-- `test_buffer_undo_restores_state`
-- `test_buffer_text_joins_lines`
-
-**`vim/motion.rs` (6 testes, funções puras):**
-- `test_motion_left_clamps_at_zero`
-- `test_motion_right_clamps_at_line_end`
-- `test_motion_down_clamps_at_last_line`
-- `test_motion_word_forward`
-- `test_motion_line_start`
-- `test_motion_line_end`
-
-**`vim/command.rs` (6 testes):**
-- `test_cmd_insert_char`
-- `test_cmd_backspace`
-- `test_cmd_delete_char`
-- `test_cmd_delete_line`
-- `test_cmd_open_line_below`
-- `test_cmd_insert_newline_splits`
-
-**Total:** 20 novos testes, todos em `src/vim/` sem ratatui
-
----
-
-## Critérios de aceitação
-
-- [ ] `cargo test` — 184 testes existentes passando
-- [ ] `cargo clippy -- -D warnings` — zero warnings
-- [ ] Navegação j/k funciona em todos os menus
-- [ ] Esc cancela em todos os menus
-- [ ] File picker preserva pré-seleção de todos os arquivos
-- [ ] Setup wizard preserva fallback provider loop
-- [ ] Config browser mostra source tags corretamente
-- [ ] `forged --yes` ainda faz commit sem UI
-- [ ] `forged --hook <file>` ainda funciona em headless
-
----
-
-## Ordem de execução recomendada
-
-```
-Fase 1 (infra)  →  Fase 2 (action menu)  →  Fase 3 (file picker)
-→  Fase 4 (settings)  →  Fase 5 (setup wizard)  →  Fase 6 (config browser)
-→  Fase 7 (limpeza)
-```
-
-Cada fase: implementar → `cargo test` → aprovar → próxima fase.
-Nunca mais de 5 arquivos por resposta.
-
----
-
-## Contagem de testes alvo pós-migração
-
-| Módulo | Testes atuais | Novos | Total |
-|---|---|---|---|
-| tui/widgets/select.rs | — | 6 | 6 |
-| tui/widgets/multi_select.rs | — | 6 | 6 |
-| tui/widgets/text_input.rs | — | 4 | 4 |
-| tui/widgets/password_input.rs | — | 1 | 1 |
-| tui/views/setup_wizard.rs | — | 4 | 4 |
-| tui/views/config_list.rs | — | 2 | 2 |
-| tui/views/settings.rs | — | 1 | 1 |
-| **Subtotal novos** | | **24** | **24** |
-| **Total geral** | **184** | +24 | **208** |
+| Toda lógica de geração AI | Intacta |
+| Config parsing/saving | Intacto |
+| Git operations | Intacto |
+| `headless mode` (GIT_PARAMS / !atty) | Intacto |
+| `--yes` flag (skip confirm) | Intacto |
+| `--hook <file>` (git hook headless) | Intacto |
+| Todos os testes de integração | Passando (26/26) |
