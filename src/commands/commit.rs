@@ -138,7 +138,7 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
     let mut current_messages = messages;
     loop {
         let message = pick_message(&current_messages)?;
-        let Some(mut message) = message else {
+        let Some(message) = message else {
             println!("Commit cancelled.");
             return Ok(());
         };
@@ -151,30 +151,18 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
                 return do_commit(&message, opts.no_verify, &opts.extra_args);
             }
             Action::Edit => {
-                let edited = open_in_editor(&message)?;
-                message = edited;
-                if message.is_empty() {
+                let Some(edited) = crate::tui::views::editor::run(&message)? else {
+                    // User cancelled the editor — go back to action menu
+                    continue;
+                };
+                let edited = edited.trim().to_string();
+                if edited.is_empty() {
                     println!("{}", "Empty message — cancelled.".dimmed());
                     return Ok(());
                 }
-                // Show edited message and loop back to action menu
-                println!("\n{}\n", message.bold());
-                match action_menu(&message, opts.clipboard)? {
-                    Action::Commit => {
-                        if opts.clipboard {
-                            return copy_to_clipboard(&message);
-                        }
-                        return do_commit(&message, opts.no_verify, &opts.extra_args);
-                    }
-                    Action::Cancel => {
-                        println!("Commit cancelled.");
-                        return Ok(());
-                    }
-                    Action::Edit | Action::Regenerate | Action::Settings => {
-                        // Let the outer loop handle regenerate, settings, or another edit
-                        continue;
-                    }
-                }
+                // Put the edited text back so the next loop iteration shows it
+                current_messages = vec![edited];
+                continue;
             }
             Action::Regenerate => {
                 let params = build_generation_params(&session, custom_prompt);
@@ -542,40 +530,6 @@ fn pick_message(messages: &[String]) -> Result<Option<String>> {
 
 // --- Helpers ---
 
-/// Open `$VISUAL` / `$EDITOR` with the message pre-filled in a temp file.
-/// Returns the trimmed content after the user saves and closes the editor.
-fn open_in_editor(content: &str) -> Result<String> {
-    use std::io::Write;
-
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "vi".to_string());
-
-    let tmp_path =
-        std::env::temp_dir().join(format!("forged-edit-{}.txt", std::process::id()));
-
-    {
-        let mut f = std::fs::File::create(&tmp_path)?;
-        f.write_all(content.as_bytes())?;
-    }
-
-    let status = std::process::Command::new(&editor)
-        .arg(&tmp_path)
-        .status()
-        .with_context(|| format!("Failed to open editor '{editor}'"))?;
-
-    if !status.success() {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Ok(String::new());
-    }
-
-    let result = std::fs::read_to_string(&tmp_path)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let _ = std::fs::remove_file(&tmp_path);
-    Ok(result)
-}
 
 fn do_commit(message: &str, no_verify: bool, extra_args: &[String]) -> Result<()> {
     match git::commit(message, no_verify, extra_args)? {

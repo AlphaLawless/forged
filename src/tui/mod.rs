@@ -8,6 +8,7 @@ pub mod widgets {
 
 pub mod views {
     pub mod action_menu;
+    pub mod editor;
     pub mod file_picker;
 }
 

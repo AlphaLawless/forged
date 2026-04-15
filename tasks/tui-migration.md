@@ -34,24 +34,29 @@ Referência de arquitetura: `study/claude-code-rust/src/{app,ui}/`
 
 ```
 src/
-├── tui/
-│   ├── mod.rs            # terminal lifecycle: init, restore, run_with
-│   ├── theme.rs          # cores e estilos centralizados
-│   ├── events.rs         # loop de eventos crossterm
-│   ├── widgets/
-│   │   ├── mod.rs
-│   │   ├── select.rs     # lista vertical com j/k + Enter/Esc
-│   │   ├── multi_select.rs  # lista com Space para toggle + a/n
-│   │   ├── text_input.rs    # linha de texto inline (para settings)
-│   │   └── password_input.rs  # máscara de senha
-│   └── views/
-│       ├── mod.rs
-│       ├── action_menu.rs   # menu pós-geração
-│       ├── file_picker.rs   # staging de arquivos
-│       ├── settings.rs      # session settings
-│       ├── setup_wizard.rs  # wizard global + local
-│       └── config_list.rs   # browser de configs
+├── vim/                      # motor vim-like — zero deps de TUI (Fase 8)
+│   ├── mod.rs                # re-exports: Buffer, VimKey, BufferEvent
+│   ├── buffer.rs             # Buffer + Cursor + Mode + histórico
+│   ├── motion.rs             # funções puras de cálculo de posição
+│   ├── command.rs            # mutações: insert, delete, open_line...
+│   └── history.rs            # Snapshot para undo/redo
+│
+└── tui/
+    ├── mod.rs                # terminal lifecycle: init, restore, run_with
+    ├── theme.rs              # cores e estilos centralizados
+    ├── widgets/
+    │   ├── select.rs         # lista vertical com j/k + Enter/Esc
+    │   ├── multi_select.rs   # lista com Space para toggle + a/n
+    │   └── text_input.rs     # linha de texto + run_masked (senhas)
+    └── views/
+        ├── action_menu.rs    # menu pós-geração
+        ├── file_picker.rs    # staging de arquivos
+        └── editor.rs         # adaptador: VimKey ↔ crossterm + render ratatui
 ```
+
+**Regra de dependência:** `src/vim/` nunca importa de `src/tui/`. O fluxo é
+unidirecional: `crossterm::KeyEvent` → adaptado em `editor.rs` → `VimKey` →
+`vim::Buffer` → estado renderizado pelo ratatui.
 
 ### Padrão de separação
 
@@ -377,6 +382,244 @@ pub struct ProfileEntry {
 | Todos os testes existentes (unitários + integração) | Testam lógica, não UI |
 | `headless mode` (GIT_PARAMS / !atty) | Bypass de UI, mantido |
 | `--yes` flag | Bypass de UI, mantido |
+
+---
+
+---
+
+### Fase 8 — Motor vim-like (`src/vim/`) [EXTRA]
+
+Extrair toda a lógica de modal-editing para um módulo independente `src/vim/`, sem
+qualquer dependência de ratatui, crossterm ou TUI. O motor é puro Rust — recebe
+eventos de tecla como tipos simples e retorna mutações de estado. A view em
+`src/tui/views/editor.rs` é apenas o adaptador que conecta o motor ao TUI.
+
+#### Princípio de separação
+
+```
+src/vim/          ← motor puro (zero deps de TUI)
+    mod.rs
+    buffer.rs     ← estrutura de texto + cursor
+    motion.rs     ← cálculo de posições (hjkl, w/b, 0/$)
+    command.rs    ← execução de comandos (dd, x, u, i, a...)
+    history.rs    ← undo/redo stack
+
+src/tui/views/
+    editor.rs     ← adaptador: KeyEvent → VimKey → motor → render ratatui
+```
+
+A regra é: nada em `src/vim/` pode importar de `src/tui/`. O fluxo é unidirecional:
+
+```
+crossterm::KeyEvent
+    ↓  (adaptado em editor.rs)
+vim::VimKey          ← tipo próprio, sem coupling com crossterm
+    ↓
+vim::Buffer::apply()  ← única função de entrada do motor
+    ↓
+vim::Buffer          ← novo estado (imutável por design interno)
+    ↓  (lido em editor.rs)
+ratatui render
+```
+
+#### Estrutura do motor (`src/vim/`)
+
+**`buffer.rs`** — estado completo do editor:
+```rust
+pub struct Buffer {
+    pub lines: Vec<String>,
+    pub cursor: Cursor,
+    pub mode: Mode,
+    history: Vec<Snapshot>,  // privado — exposto só via undo()
+}
+
+pub struct Cursor {
+    pub row: usize,
+    pub col: usize,
+}
+
+pub enum Mode {
+    Normal,
+    Insert,
+}
+
+impl Buffer {
+    pub fn new(text: &str) -> Self { ... }
+    pub fn text(&self) -> String { ... }          // join lines com \n
+    pub fn apply(&mut self, key: VimKey) -> BufferEvent { ... }
+    pub fn undo(&mut self) { ... }
+}
+
+pub enum BufferEvent {
+    Noop,
+    Modified,
+    ModeChanged(Mode),
+    Confirmed,   // Enter em Normal → sinal para a view fechar
+    Cancelled,   // :q / Esc com discard confirmado
+}
+```
+
+**`motion.rs`** — cálculo de posições (funções puras, sem estado):
+```rust
+pub fn move_left(buf: &Buffer) -> Cursor { ... }
+pub fn move_right(buf: &Buffer) -> Cursor { ... }
+pub fn move_up(buf: &Buffer) -> Cursor { ... }
+pub fn move_down(buf: &Buffer) -> Cursor { ... }
+pub fn move_word_forward(buf: &Buffer) -> Cursor { ... }
+pub fn move_word_backward(buf: &Buffer) -> Cursor { ... }
+pub fn move_line_start(buf: &Buffer) -> Cursor { ... }
+pub fn move_line_end(buf: &Buffer) -> Cursor { ... }
+```
+
+**`command.rs`** — execução de comandos (recebe `&mut Buffer`):
+```rust
+pub fn delete_char(buf: &mut Buffer) { ... }       // x
+pub fn delete_line(buf: &mut Buffer) { ... }       // dd
+pub fn open_line_below(buf: &mut Buffer) { ... }   // o
+pub fn open_line_above(buf: &mut Buffer) { ... }   // O
+pub fn insert_char(buf: &mut Buffer, c: char) { ... }
+pub fn insert_newline(buf: &mut Buffer) { ... }
+pub fn backspace(buf: &mut Buffer) { ... }
+```
+
+**`history.rs`** — snapshot simples para undo:
+```rust
+struct Snapshot {
+    lines: Vec<String>,
+    cursor: Cursor,
+}
+// Mantido dentro de Buffer, sem exposição pública além de undo()
+```
+
+**`VimKey`** — tipo intermediário (sem coupling com crossterm):
+```rust
+pub enum VimKey {
+    Char(char),
+    Enter,
+    Esc,
+    Backspace,
+    Delete,
+    Up, Down, Left, Right,
+}
+```
+
+#### Teclas suportadas — NORMAL mode
+
+| Tecla | `VimKey` | Ação |
+|---|---|---|
+| `h` / `←` | `Left` | cursor ← |
+| `l` / `→` | `Right` | cursor → |
+| `k` / `↑` | `Up` | linha acima |
+| `j` / `↓` | `Down` | linha abaixo |
+| `0` | `Char('0')` | início da linha |
+| `$` | `Char('$')` | fim da linha |
+| `w` | `Char('w')` | próxima palavra |
+| `b` | `Char('b')` | palavra anterior |
+| `x` | `Char('x')` | apaga char sob cursor |
+| `dd` | sequência `d`, `d` | apaga linha inteira |
+| `u` | `Char('u')` | undo |
+| `i` | `Char('i')` | → INSERT (antes do cursor) |
+| `a` | `Char('a')` | → INSERT (após cursor) |
+| `A` | `Char('A')` | → INSERT (fim da linha) |
+| `o` | `Char('o')` | nova linha abaixo + INSERT |
+| `O` | `Char('O')` | nova linha acima + INSERT |
+| `Enter` | `Enter` | confirma → `BufferEvent::Confirmed` |
+| `Esc` | `Esc` | prompt descarte se modificado |
+
+#### Teclas suportadas — INSERT mode
+
+| Tecla | Ação |
+|---|---|
+| `Esc` | volta ao NORMAL |
+| Char | inserção no cursor |
+| `Backspace` | apaga anterior |
+| `Enter` | quebra linha |
+| `←/→/↑/↓` | movimentação básica |
+
+#### Adaptador view (`src/tui/views/editor.rs`)
+
+Responsabilidades únicas:
+1. Converter `crossterm::KeyEvent` → `vim::VimKey`
+2. Chamar `buffer.apply(key)`
+3. Reagir ao `BufferEvent` retornado (fechar TUI se `Confirmed`/`Cancelled`)
+4. Renderizar `buffer.lines` + cursor + indicador de modo com ratatui
+
+```rust
+// editor.rs — único ponto de contato entre os dois mundos
+fn crossterm_to_vim(key: KeyEvent) -> Option<VimKey> { ... }
+
+pub fn run(initial_text: &str) -> anyhow::Result<Option<String>> {
+    let buffer = vim::Buffer::new(initial_text);
+    crate::tui::run_with(buffer, render, |buf, event| {
+        if let Event::Key(k) = event {
+            if let Some(vk) = crossterm_to_vim(k) {
+                match buf.apply(vk) {
+                    BufferEvent::Confirmed => return Some(Some(buf.text())),
+                    BufferEvent::Cancelled => return Some(None),
+                    _ => {}
+                }
+            }
+        }
+        None
+    })
+}
+```
+
+**Layout do editor:**
+```
+┌─ edit commit message ──────────────────────────── [NORMAL] ─┐
+│ feat: add OAuth2 login flow                                  │
+│                                                              │
+│ - Add login endpoint                                         │
+│ - Add token refresh█                                         │
+└──────────────────────────────────────────────────────────────┘
+
+  Enter confirm  Esc discard  i insert  dd delete line  u undo
+```
+
+Borda muda de cor: `BORDER` em NORMAL → `PRIMARY` em INSERT.
+
+**Integração em `commit.rs`:**
+```rust
+Action::Edit => {
+    let edited = crate::tui::views::editor::run(&message)?;
+    // None = cancelou, Some(text) = confirmou
+}
+```
+
+`open_in_editor()` mantido como fallback para flag futura `--external-editor`.
+
+#### Testes novos
+
+Todos os testes do motor ficam em `src/vim/` — zero dependência de ratatui:
+
+**`vim/buffer.rs` (8 testes):**
+- `test_buffer_new_preserves_text`
+- `test_buffer_confirmed_returns_event`
+- `test_buffer_cancelled_returns_event`
+- `test_buffer_mode_starts_normal`
+- `test_buffer_i_enters_insert`
+- `test_buffer_esc_returns_to_normal`
+- `test_buffer_undo_restores_state`
+- `test_buffer_text_joins_lines`
+
+**`vim/motion.rs` (6 testes, funções puras):**
+- `test_motion_left_clamps_at_zero`
+- `test_motion_right_clamps_at_line_end`
+- `test_motion_down_clamps_at_last_line`
+- `test_motion_word_forward`
+- `test_motion_line_start`
+- `test_motion_line_end`
+
+**`vim/command.rs` (6 testes):**
+- `test_cmd_insert_char`
+- `test_cmd_backspace`
+- `test_cmd_delete_char`
+- `test_cmd_delete_line`
+- `test_cmd_open_line_below`
+- `test_cmd_insert_newline_splits`
+
+**Total:** 20 novos testes, todos em `src/vim/` sem ratatui
 
 ---
 

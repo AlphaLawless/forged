@@ -7,3 +7,4 @@ pub mod config;
 pub mod git;
 pub mod prompt;
 pub mod tui;
+pub mod vim;
