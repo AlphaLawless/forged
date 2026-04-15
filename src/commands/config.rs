@@ -1,7 +1,7 @@
 use crate::config::{self, Config, ConfigSource, ConfigWithSources};
+use crate::tui::widgets::select::SelectItem;
 use anyhow::Result;
 use colored::Colorize;
-use inquire::Select;
 
 pub fn run_set(key: &str, value: &str) -> Result<()> {
     let mut config = Config::load_global()?;
@@ -134,11 +134,14 @@ pub fn run_list() -> Result<()> {
             }
         }
 
-        let selected = Select::new("Select a config to view:", options)
-            .with_page_size(10)
-            .prompt_skippable()?;
+        let items: Vec<SelectItem<String>> = options
+            .iter()
+            .map(|o| SelectItem::new(o.clone(), o.clone()))
+            .collect();
 
-        let Some(choice) = selected else {
+        let Some(choice) =
+            crate::tui::widgets::select::run("Select a config to view", items, 0)?
+        else {
             break;
         };
 

@@ -11,7 +11,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
-inquire = { version = "0.7", features = ["editor"] }
+ratatui = "0.30"
+crossterm = "0.29"
 colored = "3"
 anyhow = "1"
 async-trait = "0.1"

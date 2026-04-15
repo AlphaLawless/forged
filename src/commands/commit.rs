@@ -6,6 +6,7 @@ use crate::ai::FailoverReport;
 use crate::ai::provider::{
     GenerateOpts, generate_description_with_failover, generate_messages_with_failover,
 };
+use crate::tui::widgets::select::SelectItem;
 use crate::clipboard;
 use crate::config::CommitType;
 use crate::config::Config;
@@ -150,10 +151,8 @@ pub async fn run(opts: CommitOpts) -> Result<()> {
                 return do_commit(&message, opts.no_verify, &opts.extra_args);
             }
             Action::Edit => {
-                let edited = inquire::Editor::new("Edit commit message:")
-                    .with_predefined_text(&message)
-                    .prompt()?;
-                message = edited.trim().to_string();
+                let edited = open_in_editor(&message)?;
+                message = edited;
                 if message.is_empty() {
                     println!("{}", "Empty message — cancelled.".dimmed());
                     return Ok(());
@@ -390,33 +389,20 @@ const ACTION_CANCEL: &str = "Cancel";
 const ACTION_COPY: &str = "Copy to clipboard";
 
 fn action_menu(message: &str, clipboard_mode: bool) -> Result<Action> {
-    println!("\n{}\n", message.bold());
-
-    let mut options = vec![];
-    if clipboard_mode {
-        options.push(ACTION_COPY);
+    let first = if clipboard_mode {
+        SelectItem::new(ACTION_COPY, Action::Commit)
     } else {
-        options.push(ACTION_COMMIT);
-    }
-    options.extend([
-        ACTION_EDIT,
-        ACTION_REGENERATE,
-        ACTION_SETTINGS,
-        ACTION_CANCEL,
-    ]);
-
-    let choice = inquire::Select::new("What do you want to do?", options)
-        .with_page_size(10)
-        .prompt()?;
-
-    match choice {
-        ACTION_COMMIT | ACTION_COPY => Ok(Action::Commit),
-        ACTION_EDIT => Ok(Action::Edit),
-        ACTION_REGENERATE => Ok(Action::Regenerate),
-        ACTION_SETTINGS => Ok(Action::Settings),
-        ACTION_CANCEL => Ok(Action::Cancel),
-        _ => Ok(Action::Cancel),
-    }
+        SelectItem::new(ACTION_COMMIT, Action::Commit)
+    };
+    let items = vec![
+        first,
+        SelectItem::new(ACTION_EDIT, Action::Edit),
+        SelectItem::new(ACTION_REGENERATE, Action::Regenerate),
+        SelectItem::new(ACTION_SETTINGS, Action::Settings),
+        SelectItem::new(ACTION_CANCEL, Action::Cancel),
+    ];
+    let result = crate::tui::views::action_menu::run(message, items)?;
+    Ok(result.unwrap_or(Action::Cancel))
 }
 
 // --- Settings menu ---
@@ -443,97 +429,99 @@ const SETTING_BACK: &str = "← Back";
 /// Show session settings and let the user edit them interactively.
 /// Returns `true` if any setting was changed.
 fn settings_menu(session: &mut SessionConfig) -> Result<bool> {
+    use crate::tui::widgets::{select::SelectItem, text_input};
+
+    #[derive(Clone)]
+    enum Field {
+        Locale,
+        Type,
+        MaxLength,
+        Generate,
+        Back,
+    }
+
     let mut changed = false;
 
     loop {
-        println!();
-        println!("  {}", "Session settings:".dimmed());
-        println!("    locale     = {}", session.locale);
-        println!("    type       = {}", session.commit_type.as_str());
-        println!("    max_length = {}", session.max_length);
-        println!("    generate   = {}", session.generate);
-        println!();
-
-        let options = vec![
-            SETTING_LOCALE,
-            SETTING_TYPE,
-            SETTING_MAX_LENGTH,
-            SETTING_GENERATE,
-            SETTING_BACK,
+        let items = vec![
+            SelectItem::new(SETTING_LOCALE, Field::Locale)
+                .with_hint(&session.locale),
+            SelectItem::new(SETTING_TYPE, Field::Type)
+                .with_hint(session.commit_type.as_str()),
+            SelectItem::new(SETTING_MAX_LENGTH, Field::MaxLength)
+                .with_hint(session.max_length.to_string()),
+            SelectItem::new(SETTING_GENERATE, Field::Generate)
+                .with_hint(session.generate.to_string()),
+            SelectItem::new(SETTING_BACK, Field::Back),
         ];
-        let choice = inquire::Select::new("Change setting:", options)
-            .with_page_size(10)
-            .prompt()?;
 
-        match choice {
-            SETTING_LOCALE => {
-                let value = inquire::Text::new("Locale:")
-                    .with_default(&session.locale)
-                    .with_help_message("e.g. en, pt-br, ja, es")
-                    .prompt()?;
-                if value != session.locale {
+        let Some(field) =
+            crate::tui::widgets::select::run("Session settings", items, 0)?
+        else {
+            break;
+        };
+
+        match field {
+            Field::Back => break,
+            Field::Locale => {
+                let Some(value) =
+                    text_input::run("Locale", &session.locale, "e.g. en, pt-br, ja, es")?
+                else {
+                    continue;
+                };
+                if !value.is_empty() && value != session.locale {
                     session.locale = value;
                     changed = true;
-                    println!("  {} locale → {}", "✔".green(), session.locale);
                 }
             }
-            SETTING_TYPE => {
-                let labels: Vec<&str> = COMMIT_TYPE_OPTIONS.iter().map(|(_, l)| *l).collect();
+            Field::Type => {
+                let type_items: Vec<SelectItem<&str>> = COMMIT_TYPE_OPTIONS
+                    .iter()
+                    .map(|(key, label)| SelectItem::new(*label, *key))
+                    .collect();
                 let current_idx = COMMIT_TYPE_OPTIONS
                     .iter()
                     .position(|(k, _)| *k == session.commit_type.as_str())
                     .unwrap_or(0);
-                let selected = inquire::Select::new("Commit type:", labels)
-                    .with_starting_cursor(current_idx)
-                    .with_page_size(10)
-                    .prompt()?;
-                let key = COMMIT_TYPE_OPTIONS
-                    .iter()
-                    .find(|(_, l)| *l == selected)
-                    .map(|(k, _)| *k)
-                    .unwrap_or("conventional");
+                let Some(key) =
+                    crate::tui::widgets::select::run("Commit type", type_items, current_idx)?
+                else {
+                    continue;
+                };
                 let new_type = CommitType::from_str_loose(key)?;
                 if new_type != session.commit_type {
                     session.commit_type = new_type;
                     changed = true;
-                    println!("  {} type → {}", "✔".green(), session.commit_type.as_str());
                 }
             }
-            SETTING_MAX_LENGTH => {
-                let value = inquire::Text::new("Max length:")
-                    .with_default(&session.max_length.to_string())
-                    .prompt()?;
-                match value.trim().parse::<u32>() {
-                    Ok(n) if n >= 20 => {
-                        if n != session.max_length {
-                            session.max_length = n;
-                            changed = true;
-                            println!("  {} max_length → {}", "✔".green(), n);
-                        }
-                    }
-                    _ => {
-                        println!("  {} Must be a number ≥ 20", "⚠".yellow());
-                    }
+            Field::MaxLength => {
+                let Some(value) =
+                    text_input::run("Max length", &session.max_length.to_string(), "minimum 20")?
+                else {
+                    continue;
+                };
+                if let Ok(n) = value.trim().parse::<u32>()
+                    && n >= 20
+                    && n != session.max_length
+                {
+                    session.max_length = n;
+                    changed = true;
                 }
             }
-            SETTING_GENERATE => {
-                let value = inquire::Text::new("Generate count (1-5):")
-                    .with_default(&session.generate.to_string())
-                    .prompt()?;
-                match value.trim().parse::<u8>() {
-                    Ok(n) if (1..=5).contains(&n) => {
-                        if n != session.generate {
-                            session.generate = n;
-                            changed = true;
-                            println!("  {} generate → {}", "✔".green(), n);
-                        }
-                    }
-                    _ => {
-                        println!("  {} Must be between 1 and 5", "⚠".yellow());
-                    }
+            Field::Generate => {
+                let Some(value) =
+                    text_input::run("Generate count", &session.generate.to_string(), "1 – 5")?
+                else {
+                    continue;
+                };
+                if let Ok(n) = value.trim().parse::<u8>()
+                    && (1..=5).contains(&n)
+                    && n != session.generate
+                {
+                    session.generate = n;
+                    changed = true;
                 }
             }
-            _ => break,
         }
     }
 
@@ -545,14 +533,49 @@ fn pick_message(messages: &[String]) -> Result<Option<String>> {
     if messages.len() == 1 {
         return Ok(Some(messages[0].clone()));
     }
-
-    let selection = inquire::Select::new("Pick a commit message:", messages.to_vec())
-        .with_page_size(10)
-        .prompt_skippable()?;
-    Ok(selection)
+    let items = messages
+        .iter()
+        .map(|m| SelectItem::new(m.clone(), m.clone()))
+        .collect();
+    crate::tui::widgets::select::run("Pick a commit message", items, 0)
 }
 
 // --- Helpers ---
+
+/// Open `$VISUAL` / `$EDITOR` with the message pre-filled in a temp file.
+/// Returns the trimmed content after the user saves and closes the editor.
+fn open_in_editor(content: &str) -> Result<String> {
+    use std::io::Write;
+
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+
+    let tmp_path =
+        std::env::temp_dir().join(format!("forged-edit-{}.txt", std::process::id()));
+
+    {
+        let mut f = std::fs::File::create(&tmp_path)?;
+        f.write_all(content.as_bytes())?;
+    }
+
+    let status = std::process::Command::new(&editor)
+        .arg(&tmp_path)
+        .status()
+        .with_context(|| format!("Failed to open editor '{editor}'"))?;
+
+    if !status.success() {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Ok(String::new());
+    }
+
+    let result = std::fs::read_to_string(&tmp_path)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let _ = std::fs::remove_file(&tmp_path);
+    Ok(result)
+}
 
 fn do_commit(message: &str, no_verify: bool, extra_args: &[String]) -> Result<()> {
     match git::commit(message, no_verify, extra_args)? {
@@ -597,10 +620,10 @@ fn offer_stage_changes() -> Result<bool> {
         return Ok(false);
     }
 
-    println!("{} No staged changes found.\n", "⚠".yellow());
+    println!("{} No staged changes found.", "⚠".yellow());
 
-    // Build labels: "[M] src/main.rs"
-    let labels: Vec<String> = changes
+    // Build (label, path) pairs for the file picker
+    let entries: Vec<(String, String)> = changes
         .iter()
         .map(|f| {
             let tag = match f.status.as_str() {
@@ -609,35 +632,21 @@ fn offer_stage_changes() -> Result<bool> {
                 "deleted" => "[D]",
                 _ => "[?]",
             };
-            format!("{} {}", tag, f.path)
+            (format!("{} {}", tag, f.path), f.path.clone())
         })
         .collect();
 
-    let selected = inquire::MultiSelect::new("Stage files:", labels.clone())
-        .with_all_selected_by_default()
-        .with_page_size(20)
-        .prompt()?;
+    let Some(selected_paths) = crate::tui::views::file_picker::run(&entries)? else {
+        println!();
+        println!("  {} Cancelled.", "tip:".dimmed());
+        return Ok(false);
+    };
 
-    if selected.is_empty() {
+    if selected_paths.is_empty() {
         println!();
         println!("  {} No files selected.", "tip:".dimmed());
         return Ok(false);
     }
-
-    // Map selected labels back to file paths
-    let selected_paths: Vec<String> = selected
-        .iter()
-        .filter_map(|label| {
-            // Find the matching change by label
-            labels.iter().zip(changes.iter()).find_map(|(l, c)| {
-                if l == label {
-                    Some(c.path.clone())
-                } else {
-                    None
-                }
-            })
-        })
-        .collect();
 
     if selected_paths.len() == changes.len() {
         git::stage_all()?;
